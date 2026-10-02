@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
-CREDIT_RISK_MODEL_PATH = _BACKEND_ROOT / "ml" / "credit_risk" / "models" / "credit_risk_pipeline.joblib"
+CREDIT_RISK_MODEL_PATH = _BACKEND_ROOT / "ml" / "credit" / "models" / "credit_risk_pipeline.joblib"
 DEMAND_MODEL_PATH = _BACKEND_ROOT / "ml" / "demand" / "models" / "forecasting_pipeline.joblib"
 
 _credit_risk_predictor = None
