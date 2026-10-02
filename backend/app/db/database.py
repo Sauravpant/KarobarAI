@@ -19,10 +19,10 @@ except ModuleNotFoundError:
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    pool_size=20,        # Allow up to 20 persistent connections
-    max_overflow=10,     # Allow 10 extra connections when pool is full
-    pool_timeout=30,     # Raise after 30s if no connection is available
-    pool_recycle=1800,   # Recycle connections after 30 min to avoid stale DB connections
+    pool_size=20,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=1800,
 )
 
 SessionLocal = sessionmaker(
@@ -31,10 +31,8 @@ SessionLocal = sessionmaker(
     autocommit=False,
 )
 
-
 class Base(DeclarativeBase):
     pass
-
 
 def get_db():
     db = SessionLocal()

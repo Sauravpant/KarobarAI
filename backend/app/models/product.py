@@ -5,7 +5,6 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 
-
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
@@ -33,6 +32,5 @@ class Product(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # Relationships
     shop: Mapped["Shop"] = relationship(back_populates="products")
     category: Mapped["Category"] = relationship(back_populates="products")

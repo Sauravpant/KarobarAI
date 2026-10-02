@@ -3,13 +3,9 @@ from datetime import date, datetime, timezone
 from pydantic import BaseModel, field_serializer
 from app.models.enums import PaymentType, CreditStatus, TransactionType
 
-
-# ---- Request Schemas ----
-
 class TransactionItemCreateRequest(BaseModel):
     product_id: uuid.UUID
     quantity: int
-
 
 class TransactionCreateRequest(BaseModel):
     customer_id: uuid.UUID | None = None
@@ -18,11 +14,7 @@ class TransactionCreateRequest(BaseModel):
     discount: float = 0.00
     notes: str | None = None
     items: list[TransactionItemCreateRequest]
-    # For credit sales
     due_date: date | None = None
-
-
-# ---- Response Schemas ----
 
 class TransactionItemResponse(BaseModel):
     id: uuid.UUID
@@ -32,7 +24,6 @@ class TransactionItemResponse(BaseModel):
     subtotal: float
 
     model_config = {"from_attributes": True}
-
 
 class CreditSaleResponse(BaseModel):
     id: uuid.UUID
@@ -44,7 +35,6 @@ class CreditSaleResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
 
 class TransactionResponse(BaseModel):
     id: uuid.UUID
@@ -62,18 +52,15 @@ class TransactionResponse(BaseModel):
 
     @field_serializer("created_at")
     def serialize_created_at(self, v: datetime, _info) -> str:
-        # Ensure UTC timezone info is always included in the serialized output
         if v.tzinfo is None:
             v = v.replace(tzinfo=timezone.utc)
         return v.isoformat()
 
     model_config = {"from_attributes": True}
 
-
 class CreditSaleUpdateRequest(BaseModel):
     status: CreditStatus | None = None
     remarks: str | None = None
-
 
 class TransactionStatsResponse(BaseModel):
     today_sales: float
@@ -81,7 +68,6 @@ class TransactionStatsResponse(BaseModel):
     credit_sales: float
     pending_credit: float
     total_count: int
-
 
 class PaginatedTransactionsResponse(BaseModel):
     items: list[TransactionResponse]

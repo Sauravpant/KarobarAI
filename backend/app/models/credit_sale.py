@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 from app.models.enums import CreditStatus
 
-
 class CreditSale(Base):
     __tablename__ = "credit_sales"
     __table_args__ = (
@@ -26,6 +25,5 @@ class CreditSale(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    # Relationships
     transaction: Mapped["Transaction"] = relationship(back_populates="credit_sale")
     customer: Mapped["Customer"] = relationship()

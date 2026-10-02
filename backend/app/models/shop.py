@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 from app.models.enums import LocationType
 
-
 class Shop(Base):
     __tablename__ = "shops"
     __table_args__ = (
@@ -22,7 +21,6 @@ class Shop(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # Relationships
     user: Mapped["User"] = relationship(back_populates="shops")
     customers: Mapped[list["Customer"]] = relationship(back_populates="shop")
     products: Mapped[list["Product"]] = relationship(back_populates="shop")

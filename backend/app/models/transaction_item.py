@@ -3,7 +3,6 @@ from sqlalchemy import Integer, Numeric, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 
-
 class TransactionItem(Base):
     __tablename__ = "transaction_items"
     __table_args__ = (
@@ -19,6 +18,5 @@ class TransactionItem(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(10, 2))
     subtotal: Mapped[float] = mapped_column(Numeric(10, 2))
 
-    # Relationships
     transaction: Mapped["Transaction"] = relationship(back_populates="items")
     product: Mapped["Product"] = relationship()

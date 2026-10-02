@@ -6,11 +6,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 from app.models.enums import PaymentType, TransactionType
 
-
 class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
-        # Composite indexes for the most common filter patterns
         Index("ix_transactions_shop_type",    "shop_id", "transaction_type"),
         Index("ix_transactions_shop_created", "shop_id", "created_at"),
         Index("ix_transactions_shop_payment", "shop_id", "payment_type"),
@@ -33,7 +31,6 @@ class Transaction(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
     customer: Mapped["Customer"] = relationship(back_populates="transactions")
     items: Mapped[list["TransactionItem"]] = relationship(back_populates="transaction")
     credit_sale: Mapped["CreditSale"] = relationship(back_populates="transaction", uselist=False)
