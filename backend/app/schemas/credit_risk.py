@@ -1,8 +1,3 @@
-"""
-Credit Risk Schemas
-===================
-Pydantic request / response models for the Credit Risk API.
-"""
 from __future__ import annotations
 
 import uuid
@@ -11,17 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-
-# ---------------------------------------------------------------------------
-# Request
-# ---------------------------------------------------------------------------
-
 class CreditRiskPredictRequest(BaseModel):
-    """
-    All 18 features expected by the CreditRiskPredictor.
-    When not provided, reasonable defaults of 0 are used, but for accurate
-    predictions all fields should be supplied.
-    """
     relationship_days: int = Field(..., ge=0, description="Days since the customer first transacted")
     cash_purchase_value_last_30d: float = Field(..., ge=0, description="Total cash purchase value in last 30 days")
     credit_purchase_value_last_30d: float = Field(..., ge=0, description="Total credit purchase value in last 30 days")
@@ -41,15 +26,9 @@ class CreditRiskPredictRequest(BaseModel):
     max_outstanding_ever: float = Field(..., ge=0, description="Maximum outstanding balance ever recorded")
     days_since_last_purchase: int = Field(..., ge=0, description="Days elapsed since the customer's last purchase")
 
-
-# ---------------------------------------------------------------------------
-# Response models
-# ---------------------------------------------------------------------------
-
 class ShapFeature(BaseModel):
     feature: str
     shap_value: float
-
 
 class CreditRiskPredictResponse(BaseModel):
     risk_prediction: int = Field(..., description="1 = high risk, 0 = low risk")
@@ -58,7 +37,6 @@ class CreditRiskPredictResponse(BaseModel):
     threshold: float = Field(..., description="Decision threshold used")
     confidence: float
     model: str
-
 
 class CreditRiskExplainResponse(BaseModel):
     risk_prediction: int
@@ -71,18 +49,16 @@ class CreditRiskExplainResponse(BaseModel):
     feature_contributions: Dict[str, float] = Field(..., description="Full SHAP value map for all features")
     human_readable_explanation: str
 
-
 class GlobalImportanceFeature(BaseModel):
     feature: str
     mean_abs_shap: float
     rank: int
-
 
 class CreditRiskGlobalImportanceResponse(BaseModel):
     ranked_features: List[str]
     mean_abs_shap_values: Dict[str, float]
     feature_importance_table: List[Dict[str, Any]]
 
-
 class CreditRiskModelMetadataResponse(BaseModel):
     metadata: Dict[str, Any]
+

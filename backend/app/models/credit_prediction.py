@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 from app.models.enums import RiskLevel
 
-
 class CreditPrediction(Base):
     __tablename__ = "credit_predictions"
 
@@ -20,5 +19,4 @@ class CreditPrediction(Base):
 
     generated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    # Relationships
     customer: Mapped["Customer"] = relationship(back_populates="credit_predictions")

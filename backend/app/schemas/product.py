@@ -2,9 +2,6 @@ import uuid
 from datetime import datetime
 from pydantic import BaseModel
 
-
-# ---- Request Schemas ----
-
 class ProductCreateRequest(BaseModel):
     category_id: uuid.UUID
     product_name: str
@@ -17,7 +14,6 @@ class ProductCreateRequest(BaseModel):
     reorder_level: int = 0
     is_staple: bool = False
     is_perishable: bool = False
-
 
 class ProductUpdateRequest(BaseModel):
     category_id: uuid.UUID | None = None
@@ -32,14 +28,9 @@ class ProductUpdateRequest(BaseModel):
     is_perishable: bool | None = None
     is_active: bool | None = None
 
-
 class StockAdjustRequest(BaseModel):
-    """For inventory input/output adjustments."""
     quantity: int
     reason: str | None = None
-
-
-# ---- Response Schemas ----
 
 class ProductResponse(BaseModel):
     id: uuid.UUID
@@ -60,3 +51,4 @@ class ProductResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+

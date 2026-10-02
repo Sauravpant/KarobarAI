@@ -1,8 +1,3 @@
-"""
-Demand Forecast Schemas
-=======================
-Pydantic request / response models for the Demand Forecasting API.
-"""
 from __future__ import annotations
 
 import uuid
@@ -13,17 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import LocationType
 
-
-# ---------------------------------------------------------------------------
-# Request
-# ---------------------------------------------------------------------------
-
 class DemandForecastRequest(BaseModel):
-    """
-    Input to the DemandForecaster.predict_next_day / predict_next_7_days.
-    Sales and transaction history must be ordered OLDEST -> NEWEST with the
-    last element corresponding to `last_date`. Minimum 21 days required.
-    """
     shop_id: str = Field(..., description="Shop identifier string (e.g. 'S01')")
     category: str = Field(..., description="Product category slug (e.g. 'cooking_essentials')")
     location_type: str = Field(..., description="Shop location type: 'urban', 'semi_urban', or 'rural'")
@@ -52,13 +37,7 @@ class DemandForecastRequest(BaseModel):
             )
         return v
 
-
 class DemandForecastByProductRequest(BaseModel):
-    """
-    Convenience wrapper for forecasting by a specific product in the shop.
-    The service layer will look up the category, is_staple, is_perishable from the product,
-    the shop's location_type from the shop record, and build the sales_history from transactions.
-    """
     product_id: uuid.UUID
     last_date: str = Field(..., description="Date of the last known sales data (YYYY-MM-DD)")
     sales_history: Optional[List[float]] = Field(
@@ -82,12 +61,7 @@ class DemandForecastByProductRequest(BaseModel):
                 )
         return v
 
-
 class DemandForecastByProductBodyRequest(BaseModel):
-    """
-    Slim request body for the shop/product endpoints where product_id
-    is already in the URL path. Only needs last_date and history arrays.
-    """
     last_date: str = Field(..., description="Date of the last known sales data (YYYY-MM-DD)")
     sales_history: Optional[List[float]] = Field(
         None,
@@ -110,22 +84,15 @@ class DemandForecastByProductBodyRequest(BaseModel):
                 )
         return v
 
-
-# ---------------------------------------------------------------------------
-# Response models
-# ---------------------------------------------------------------------------
-
 class DailyForecastResponse(BaseModel):
     forecast_date: str
     predicted_units: float
     model: str
     confidence: float
 
-
 class ShapImpactFeature(BaseModel):
     feature: str
     impact: float
-
 
 class DailyForecastExplainResponse(BaseModel):
     forecast_date: str
@@ -136,11 +103,9 @@ class DailyForecastExplainResponse(BaseModel):
     feature_contributions: Dict[str, float]
     human_readable_explanation: str
 
-
 class DemandGlobalImportanceResponse(BaseModel):
     native_importance: List[Dict[str, Any]]
     shap_importance: Optional[List[Dict[str, Any]]] = None
-
 
 class DemandStockSummaryResponse(BaseModel):
     product_id: str
@@ -156,6 +121,6 @@ class DemandStockSummaryResponse(BaseModel):
     status: str
     summary: str
 
-
 class DemandModelMetadataResponse(BaseModel):
     metadata: Dict[str, Any]
+
