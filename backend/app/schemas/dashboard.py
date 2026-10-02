@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 
@@ -53,3 +55,36 @@ class DashboardDetail(BaseModel):
     sales_over_time: list[DailySalesProfit]
     revenue_by_category: list[CategoryRevenue]
     inventory_status: InventoryStatus
+
+
+class RestockSuggestion(BaseModel):
+    product_name: str
+    sold_today: int
+    current_stock: int
+    predicted_tomorrow: float
+    needs_restock: bool
+
+
+class DailyBriefContext(BaseModel):
+    brief_date: date
+    total_sales: float
+    total_credit_today: float
+    highest_credit_customer: dict | None  # name + outstanding balance
+    top_selling_product: str | None
+    min_selling_product: str | None
+    low_stock_alerts: list[str]
+    restock_suggestions: list[RestockSuggestion]
+
+
+class DailyBriefResponse(BaseModel):
+    brief_date: date
+    transcript: str                      # Nepali text from LLM, same string sent to TTS
+    audio_url: str | None
+    total_sales: float
+    total_credit_today: float
+    highest_credit_customer: dict | None  # name + outstanding balance
+    top_selling_product: str | None
+    min_selling_product: str | None
+    low_stock_alerts: list[str]
+    restock_suggestions: list[RestockSuggestion]  # top 2-3 products: forecast vs stock
+    ai_insight: str                      # 1-2 line synthesized suggestion
