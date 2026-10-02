@@ -52,11 +52,11 @@ async def lifespan(app: FastAPI):
 
     logger.info("=== Application ready to serve requests ===")
     yield
-    logger.info("=== Spark DeepStack API shutting down ===")
+    logger.info("=== API shutting down ===")
 
 
 app = FastAPI(
-    title="DeepStack API",
+    title="API",
     description=(
         "Backend API for the Hackathon retail management platform. "
         "Includes credit risk scoring and demand forecasting powered by ML models."
