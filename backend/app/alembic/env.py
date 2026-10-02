@@ -24,6 +24,7 @@ from app.models.transaction import Transaction
 from app.models.transaction_item import TransactionItem
 from app.models.credit_sale import CreditSale
 from app.models.demand_forecast import DemandForecast
+from app.models.daily_brief import DailyBrief
 
 config = context.config
 
