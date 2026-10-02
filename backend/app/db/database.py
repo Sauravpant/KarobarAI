@@ -25,6 +25,16 @@ engine = create_engine(
     pool_recycle=1800,
 )
 
+
+def warm_pool(n: int = 4) -> None:
+    """Open n connections in parallel at startup so first requests don't pay the ~5s connect."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(n) as ex:
+        conns = list(ex.map(lambda _: engine.connect(), range(n)))
+    for c in conns:
+        c.close()
+
 SessionLocal = sessionmaker(
     bind=engine,
     autoflush=False,
