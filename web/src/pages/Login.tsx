@@ -35,6 +35,9 @@ export default function Login() {
   const onSubmit = async (data: LoginFormValues) => {
     try {
       const response = await loginApi(data);
+      if (!response.token) {
+        throw new Error('Login response did not include a token');
+      }
       login(response.token.access_token, response.user);
       toast.success('Welcome back! Redirecting...');
 
