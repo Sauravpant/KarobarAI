@@ -1,0 +1,22 @@
+{
+  "model": "HistGradientBoosting",
+  "strategy": "class_weight",
+  "calibration_method": "none",
+  "training_rows": 38500,
+  "validation_rows": 8250,
+  "test_rows": 8250,
+  "features": 18,
+  "validation_auc": 0.825765,
+  "validation_pr_auc": 0.493486,
+  "validation_f1": 0.494715,
+  "validation_precision": 0.480296,
+  "validation_recall": 0.510026,
+  "validation_logloss": 0.496861,
+  "validation_brier_score": 0.164692,
+  "validation_mcc": 0.410514,
+  "optimal_threshold": 0.7,
+  "training_date": "2026-10-02T08:31:55.907002+00:00",
+  "version": "1.0.0",
+  "target_prevalence_train": 0.139,
+  "notes": "'validation_*' metrics above are computed on the held-out TEST split (never used for model selection, calibration, or threshold search) and represent the best unbiased estimate of production performance."
+}
