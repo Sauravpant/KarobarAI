@@ -45,7 +45,6 @@ def build_context(db: Session, user: User, shop_id: uuid.UUID, brief_date: date)
         .first()
     )
 
-    # (product, qty sold on brief_date), highest first; zero-sale products never appear here
     sold = (
         db.query(Product, sa_func.sum(TransactionItem.quantity).label("qty"))
         .join(TransactionItem, TransactionItem.product_id == Product.id)
@@ -133,7 +132,6 @@ async def get_or_create_brief(
     if existing:
         return _to_response(existing, audio_url)
 
-    # forecasting is sync CPU work; keep it off the event loop
     ctx = await asyncio.to_thread(build_context, db, user, shop_id, brief_date)
     db.commit()  # release connection; idle pooled connections get dropped during the slow LLM call
     transcript = await llm_service.generate(_prompt(ctx), temperature=0.6)
