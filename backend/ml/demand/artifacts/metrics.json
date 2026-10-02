@@ -1,0 +1,8 @@
+{
+  "best_model": "HistGradientBoosting",
+  "test_rmse": 4.135517598778121,
+  "test_mae": 3.112939615386714,
+  "test_mape": 39.003214997410545,
+  "test_r2": 0.7419336492781314,
+  "cv_rmse": 3.8704655882059655
+}
