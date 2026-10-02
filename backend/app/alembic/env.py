@@ -1,7 +1,6 @@
 import sys
 from os.path import abspath, dirname
 
-# Add backend/ to Python path
 backend_dir = dirname(dirname(dirname(abspath(__file__))))
 sys.path.insert(0, backend_dir)
 
@@ -15,13 +14,6 @@ from alembic import context
 from app.core.config import settings
 from app.db.database import Base
 
-
-# ---------------------------------------------------------
-# Import ALL models
-# ---------------------------------------------------------
-# These imports register the models with SQLAlchemy's
-# Base.metadata so Alembic can detect them during
-# --autogenerate.
 from app.models.user import User
 from app.models.shop import Shop
 from app.models.product import Product
@@ -33,31 +25,14 @@ from app.models.transaction_item import TransactionItem
 from app.models.credit_sale import CreditSale
 from app.models.demand_forecast import DemandForecast
 
-
-# ---------------------------------------------------------
-# Alembic configuration
-# ---------------------------------------------------------
-
 config = context.config
 
-
-# Configure logging from alembic.ini
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-
-# SQLAlchemy metadata used by Alembic autogenerate
 target_metadata = Base.metadata
 
-
-# ---------------------------------------------------------
-# Offline migrations
-# ---------------------------------------------------------
-
 def run_migrations_offline() -> None:
-    """
-    Run migrations without creating a database connection.
-    """
 
     url = settings.DATABASE_URL
 
@@ -73,20 +48,8 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
-
-# ---------------------------------------------------------
-# Online migrations
-# ---------------------------------------------------------
-
 def run_migrations_online() -> None:
-    """
-    Run migrations using a real database connection.
-    """
 
-    # IMPORTANT:
-    # Use the application's DATABASE_URL directly.
-    # This avoids Alembic using the placeholder
-    # sqlalchemy.url from alembic.ini.
     connectable = create_engine(
         settings.DATABASE_URL,
         poolclass=pool.NullPool,
@@ -101,11 +64,6 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
-
-
-# ---------------------------------------------------------
-# Run appropriate migration mode
-# ---------------------------------------------------------
 
 if context.is_offline_mode():
     run_migrations_offline()
