@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ from app.api.demand_forecast import router_generic as demand_generic_router
 from app.api.demand_forecast import router_shop as demand_shop_router
 from app.api.voice import router as voice_router
 from app.core.ml_manager import load_credit_risk_model, load_demand_model
+from app.db.database import warm_pool
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,12 @@ async def lifespan(app: FastAPI):
             logger.warning("✗ Demand forecasting model could NOT be loaded (model file missing)")
     except Exception as exc:
         logger.error("Error loading demand model: %s", exc, exc_info=True)
+
+    try:
+        await asyncio.to_thread(warm_pool)
+        logger.info("✓ DB connection pool warmed")
+    except Exception as exc:
+        logger.error("DB pool warm-up failed: %s", exc)
 
     logger.info("=== Application ready to serve requests ===")
     yield
