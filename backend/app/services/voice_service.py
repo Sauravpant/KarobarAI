@@ -1,6 +1,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import io
 import logging
 import os
 import re
@@ -12,14 +15,13 @@ from difflib import SequenceMatcher
 from typing import Optional
 
 import edge_tts
+import httpx
 import numpy as np
 from pydub import AudioSegment
 from pydub.effects import normalize
 from pydub.silence import detect_nonsilent
 from pydantic import BaseModel
 from fastapi import HTTPException, UploadFile, status
-from google import genai
-from google.genai import types
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -40,12 +42,17 @@ from app.schemas.voice import (
     VoiceTransactionEntry,
     SingleTransactionConfirm,
 )
-from app.services import product_service, transaction_service, customer_service
+from app.services import product_service, transaction_service, customer_service, llm_service
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.5-flash"
 TTS_VOICE = "ne-NP-SagarNeural"
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+SARVAM_MODEL = "bulbul:v3"
+SARVAM_SPEAKER = "shubh"
+SARVAM_LANGUAGE = "hi-IN"
+SARVAM_MAX_CHARS = 2500
+TTS_TIMEOUT_S = 30
 
 STT_TARGET_SAMPLE_RATE = 16000
 STT_MIN_SILENCE_LEN_MS = 300
@@ -55,7 +62,21 @@ STT_DENOISE_PROP_DECREASE = 0.75
 STT_ENABLE_DENOISE = True
 
 _stt_client = None
-_ai_client = None
+_sarvam_client = None
+
+def _get_sarvam_client():
+    global _sarvam_client
+    if _sarvam_client is None:
+        if not settings.SARVAM_API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="SARVAM_API_KEY is not configured",
+            )
+        _sarvam_client = httpx.AsyncClient(
+            headers={"api-subscription-key": settings.SARVAM_API_KEY},
+            timeout=TTS_TIMEOUT_S,
+        )
+    return _sarvam_client
 
 def _get_stt_client():
     global _stt_client
@@ -70,18 +91,6 @@ def _get_stt_client():
                 detail=f"ElevenLabs not available: {exc}",
             )
     return _stt_client
-
-def _get_ai_client():
-    global _ai_client
-    if _ai_client is None:
-        if not settings.GEMINI_API_KEY:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="GEMINI_API_KEY is not configured",
-            )
-        os.environ.setdefault("GEMINI_API_KEY", settings.GEMINI_API_KEY)
-        _ai_client = genai.Client()
-    return _ai_client
 
 def sanitize_extracted_response(
     *,
@@ -114,7 +123,23 @@ def sanitize_extracted_response(
         raw_transcript=raw_transcript,
     )
 
-async def synthesize_speech(text: str) -> bytes:
+async def _sarvam_tts(text: str) -> bytes:
+    if len(text) > SARVAM_MAX_CHARS:
+        raise ValueError(f"text too long for Sarvam ({len(text)} > {SARVAM_MAX_CHARS})")
+    response = await _get_sarvam_client().post(
+        SARVAM_TTS_URL,
+        json={
+            "text": text,
+            "language_code": SARVAM_LANGUAGE,
+            "model": SARVAM_MODEL,
+            "speaker": SARVAM_SPEAKER,
+            "output_audio_codec": "mp3",
+        },
+    )
+    response.raise_for_status()
+    return base64.b64decode(response.json()["audios"][0])
+
+async def _edge_tts(text: str) -> bytes:
     communicate = edge_tts.Communicate(
         text=text,
         voice=TTS_VOICE,
@@ -126,6 +151,36 @@ async def synthesize_speech(text: str) -> bytes:
         if chunk["type"] == "audio":
             audio_bytes += chunk["data"]
     return audio_bytes
+
+def _gtts_sync(text: str) -> bytes:
+    from gtts import gTTS
+
+    buf = io.BytesIO()
+    gTTS(text=text, lang="ne").write_to_fp(buf)
+    return buf.getvalue()
+
+async def _gtts(text: str) -> bytes:
+    return await asyncio.to_thread(_gtts_sync, text)
+
+_TTS_PROVIDERS = [("sarvam", _sarvam_tts), ("edge-tts", _edge_tts), ("gtts", _gtts)]
+
+async def synthesize_speech(text: str) -> bytes:
+    """Sarvam -> Edge-TTS -> gTTS. All return mp3."""
+    errors = []
+    for name, call in _TTS_PROVIDERS:
+        try:
+            audio = await asyncio.wait_for(call(text), TTS_TIMEOUT_S)
+            if not audio:
+                raise ValueError("empty audio")
+            logger.info("TTS served by %s", name)
+            return audio
+        except Exception as exc:
+            logger.warning("TTS provider %s failed: %r", name, exc)
+            errors.append(f"{name}: {exc!r}")
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"All TTS providers failed: {'; '.join(errors)}",
+    )
 
 def _denoise(audio: AudioSegment, sr: int) -> AudioSegment:
     try:
@@ -196,7 +251,9 @@ async def transcribe_audio(audio: UploadFile) -> str:
     try:
         cleaned_path = preprocess_audio(temp_path)
         with open(cleaned_path, "rb") as audio_file:
-            transcription = client.speech_to_text.convert(
+            # sync SDK call; run in a thread so it doesn't block other requests
+            transcription = await asyncio.to_thread(
+                client.speech_to_text.convert,
                 file=audio_file,
                 model_id="scribe_v2",
                 language_code="ne",
@@ -204,6 +261,11 @@ async def transcribe_audio(audio: UploadFile) -> str:
                 temperature=0.0,
                 diarize=False,
             )
+        logger.info(
+            "STT language=%s p=%.2f",
+            getattr(transcription, "language_code", None),
+            getattr(transcription, "language_probability", 0) or 0,
+        )
         return (transcription.text or "").strip()
     except Exception as exc:
         logger.error("Transcription failed: %s", exc, exc_info=True)
@@ -314,36 +376,15 @@ Input: "{text}"
         notes: Optional[str] = None
         transactions: Optional[list[VoiceTransactionEntry]] = None
 
-    try:
-        client = _get_ai_client()
-        response = await client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-                response_schema=ExtractResult,
-            ),
-        )
-        if not response.parsed:
-            raise ValueError("Empty Gemini response")
-        parsed: ExtractResult = response.parsed
-        return sanitize_extracted_response(
-            items=parsed.items,
-            customer_name=parsed.customer_name,
-            payment_type=parsed.payment_type,
-            notes=parsed.notes,
-            transactions=parsed.transactions,
-            raw_transcript=text,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Gemini extraction failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not extract transactions: {exc}",
-        ) from exc
+    parsed = await llm_service.generate(prompt, json_schema=ExtractResult, temperature=0.1)
+    return sanitize_extracted_response(
+        items=parsed.items,
+        customer_name=parsed.customer_name,
+        payment_type=parsed.payment_type,
+        notes=parsed.notes,
+        transactions=parsed.transactions,
+        raw_transcript=text,
+    )
 
 def confirm_voice_transactions(
     db: Session,
