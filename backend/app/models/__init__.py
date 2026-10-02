@@ -8,3 +8,4 @@ from .transaction import Transaction
 from .transaction_item import TransactionItem
 from .credit_sale import CreditSale
 from .demand_forecast import DemandForecast
+from .daily_brief import DailyBrief
