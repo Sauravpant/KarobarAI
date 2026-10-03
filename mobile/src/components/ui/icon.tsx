@@ -22,6 +22,8 @@ const ICONS = {
   minus: { ios: 'minus', android: 'remove', web: 'remove' },
   plus: { ios: 'plus', android: 'add', web: 'add' },
   close: { ios: 'xmark', android: 'close', web: 'close' },
+  trash: { ios: 'trash', android: 'delete', web: 'delete' },
+  cloudOff: { ios: 'icloud.slash', android: 'cloud_off', web: 'cloud_off' },
   sparkles: { ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' },
   waveform: { ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' },
   box: { ios: 'shippingbox.fill', android: 'inventory_2', web: 'inventory_2' },

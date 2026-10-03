@@ -43,6 +43,7 @@ function RootNavigator() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="voice" options={{ title: 'Voice entry' }} />
         <Stack.Screen name="brief" options={{ title: 'Daily brief' }} />
+        <Stack.Screen name="offline" options={{ title: 'Offline recordings' }} />
       </Stack.Protected>
       <Stack.Protected guard={!!token}>
         <Stack.Screen name="shops" options={{ title: 'Select shop' }} />

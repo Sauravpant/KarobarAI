@@ -1,11 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { errorMessage } from '@/api/client';
+import { ApiError, errorMessage } from '@/api/client';
 import { voiceApi, type VoiceConfirmation } from '@/api/endpoints';
 import { Banner } from '@/components/ui/banner';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import { RecordPanel } from '@/features/voice/components/record-panel';
 import { TranscriptEditor } from '@/features/voice/components/transcript-editor';
 import { TransactionCard } from '@/features/voice/components/transaction-card';
 import { buildConfirmPayload, buildDrafts, validateTransaction, type DraftTransaction } from '@/features/voice/draft';
+import { deleteRecording, findRecording, saveRecording } from '@/features/voice/offline-store';
 import { useVoiceRecorder } from '@/features/voice/use-voice-recorder';
 import { useActiveShop } from '@/providers/session-provider';
 import { colors, spacing, typography } from '@/theme/tokens';
@@ -28,6 +29,7 @@ interface State {
   drafts: DraftTransaction[];
   confirmation: VoiceConfirmation | null;
   error: string | null;
+  notice: string | null;
 }
 
 type Action =
@@ -40,14 +42,15 @@ type Action =
   | { type: 'confirming' }
   | { type: 'confirmed'; confirmation: VoiceConfirmation }
   | { type: 'failed'; phase: Phase; error: string }
+  | { type: 'saved-offline' }
   | { type: 'reset' };
 
-const initialState: State = { phase: 'record', transcript: '', drafts: [], confirmation: null, error: null };
+const initialState: State = { phase: 'record', transcript: '', drafts: [], confirmation: null, error: null, notice: null };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'transcribing':
-      return { ...state, phase: 'transcribing', error: null };
+      return { ...state, phase: 'transcribing', error: null, notice: null };
     case 'transcribed':
       return { ...state, phase: 'transcript', transcript: action.text };
     case 'edit-transcript':
@@ -64,6 +67,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, phase: 'done', confirmation: action.confirmation };
     case 'failed':
       return { ...state, phase: action.phase, error: action.error };
+    case 'saved-offline':
+      return { ...initialState, notice: 'No connection. Recording saved to Offline recordings; process it when you are back online.' };
     case 'reset':
       return initialState;
   }
@@ -71,6 +76,9 @@ function reducer(state: State, action: Action): State {
 
 export default function VoiceScreen() {
   const shop = useActiveShop();
+  // Set when replaying a recording from the offline queue (see app/offline.tsx).
+  const { recording: recordingName } = useLocalSearchParams<{ recording?: string }>();
+  const recording = useMemo(() => (recordingName ? findRecording(recordingName) : null), [recordingName]);
   const queryClient = useQueryClient();
   const recorder = useVoiceRecorder();
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -85,20 +93,47 @@ export default function VoiceScreen() {
     return abortRef.current.signal;
   };
 
+  const transcribe = useCallback(
+    async (uri: string, durationMillis: number) => {
+      try {
+        const text = await voiceApi.transcribe(shop.id, uri, nextSignal());
+        if (!text) throw new Error("Couldn't hear anything. Speak closer to the phone and try again.");
+        dispatch({ type: 'transcribed', text });
+      } catch (err) {
+        if (abortRef.current?.signal.aborted) return;
+        // Status 0 = server unreachable or timed out. Keep a live recording instead of losing the sale.
+        if (!recording && err instanceof ApiError && err.status === 0) {
+          try {
+            saveRecording(shop.id, uri, durationMillis);
+            return dispatch({ type: 'saved-offline' });
+          } catch {
+            // fall through to the original error
+          }
+        }
+        dispatch({ type: 'failed', phase: 'record', error: errorMessage(err) });
+      }
+    },
+    [shop.id, recording],
+  );
+
   const stopAndTranscribe = useCallback(async () => {
     dispatch({ type: 'transcribing' });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    try {
-      const uri = await recorder.stop();
-      if (!uri) throw new Error('Recording failed. Please try again.');
-      const text = await voiceApi.transcribe(shop.id, uri, nextSignal());
-      if (!text) throw new Error("Couldn't hear anything. Speak closer to the phone and try again.");
-      dispatch({ type: 'transcribed', text });
-    } catch (err) {
-      if (abortRef.current?.signal.aborted) return;
-      dispatch({ type: 'failed', phase: 'record', error: errorMessage(err) });
-    }
-  }, [recorder, shop.id]);
+    const durationMillis = recorder.durationMillis;
+    const uri = await recorder.stop().catch(() => null);
+    if (!uri) return dispatch({ type: 'failed', phase: 'record', error: 'Recording failed. Please try again.' });
+    await transcribe(uri, durationMillis);
+  }, [recorder, transcribe]);
+
+  const transcribeSaved = useCallback(() => {
+    if (!recording) return;
+    dispatch({ type: 'transcribing' });
+    transcribe(recording.uri, recording.durationMillis);
+  }, [recording, transcribe]);
+
+  useEffect(() => {
+    transcribeSaved();
+  }, [transcribeSaved]);
 
   const toggleRecording = useCallback(async () => {
     if (recorder.isRecording) return stopAndTranscribe();
@@ -143,7 +178,12 @@ export default function VoiceScreen() {
     dispatch({ type: 'confirming' });
     try {
       // Not abortable on purpose: once sent, the server may have written stock; let it finish.
-      const confirmation = await voiceApi.confirmWithAudio(shop.id, payload);
+      const confirmation = await voiceApi.confirmWithAudio(
+        shop.id,
+        recording ? { ...payload, recorded_at: new Date(recording.recordedAt).toISOString() } : payload,
+      );
+      // Saved server-side; drop the local copy so it can't be confirmed twice.
+      if (recording) deleteRecording(recording.uri);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: ['dashboard', shop.id] });
       queryClient.invalidateQueries({ queryKey: ['customers', shop.id] });
@@ -164,8 +204,15 @@ export default function VoiceScreen() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Steps phase={phase} />
           {state.error && <Banner message={state.error} />}
+          {state.notice && <Banner message={state.notice} tone="warning" />}
 
-          {(phase === 'record' || phase === 'transcribing') && (
+          {recording && phase === 'record' && <Button label="Try again" variant="secondary" onPress={transcribeSaved} />}
+
+          {recording && phase === 'transcribing' && (
+            <RecordPanel isRecording={false} busyLabel="ट्रान्सक्रिप्ट हुँदैछ…" durationMillis={0} onPress={() => {}} />
+          )}
+
+          {!recording && (phase === 'record' || phase === 'transcribing') && (
             <RecordPanel
               isRecording={recorder.isRecording}
               busyLabel={phase === 'transcribing' ? 'ट्रान्सक्रिप्ट हुँदैछ…' : null}
@@ -207,7 +254,13 @@ export default function VoiceScreen() {
 
         {(phase === 'review' || phase === 'confirming') && (
           <View style={styles.footer}>
-            <Button label="Back" variant="secondary" onPress={reset} disabled={phase === 'confirming'} style={styles.footerSecondary} />
+            <Button
+              label="Back"
+              variant="secondary"
+              onPress={recording ? () => router.back() : reset}
+              disabled={phase === 'confirming'}
+              style={styles.footerSecondary}
+            />
             <Button
               label="Confirm & save"
               onPress={confirm}
@@ -221,7 +274,11 @@ export default function VoiceScreen() {
         {phase === 'done' && (
           <View style={styles.footer}>
             <Button label="Done" variant="secondary" onPress={() => router.back()} style={styles.footerSecondary} />
-            <Button label="Record another" onPress={reset} style={styles.footerPrimary} />
+            {recording ? (
+              <Button label="Back to saved" onPress={() => router.back()} style={styles.footerPrimary} />
+            ) : (
+              <Button label="Record another" onPress={reset} style={styles.footerPrimary} />
+            )}
           </View>
         )}
       </KeyboardAvoidingView>

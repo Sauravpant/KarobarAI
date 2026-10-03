@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'expo-router';
+import { Link, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,6 +10,7 @@ import { Banner } from '@/components/ui/banner';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { StatTile } from '@/components/dashboard/stat-tile';
+import { listRecordings } from '@/features/voice/offline-store';
 import { formatCurrency, formatNumber } from '@/lib/format';
 import { useActiveShop, useSession } from '@/providers/session-provider';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
@@ -20,6 +22,17 @@ export default function HomeScreen() {
     queryKey: ['dashboard', shop.id],
     queryFn: () => dashboardApi.get(shop.id),
   });
+
+  const [offlineCount, setOfflineCount] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        setOfflineCount(listRecordings(shop.id).length);
+      } catch {
+        setOfflineCount(0);
+      }
+    }, [shop.id]),
+  );
 
   const s = data?.summary;
   const placeholder = isLoading ? '—' : '0';
@@ -80,6 +93,25 @@ export default function HomeScreen() {
             <View style={styles.voiceText}>
               <Text style={styles.voiceTitle}>Record a transaction</Text>
               <Text style={styles.voiceSubtitle}>बिक्री वा खरिद नेपालीमा बोल्नुहोस्</Text>
+            </View>
+            <Icon name="chevronRight" size={16} color={colors.textSubtle} />
+          </Pressable>
+        </Link>
+
+        <Link href="/offline" asChild>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Offline recordings, ${offlineCount} saved`}
+            style={({ pressed }) => [styles.voiceCta, pressed && styles.voiceCtaPressed]}
+          >
+            <View style={[styles.voiceIcon, styles.offlineIcon]}>
+              <Icon name="cloudOff" size={24} color={colors.text} />
+            </View>
+            <View style={styles.voiceText}>
+              <Text style={styles.voiceTitle}>Offline recordings</Text>
+              <Text style={styles.voiceSubtitle}>
+                {offlineCount ? `${offlineCount} waiting to process` : 'Record without internet, process later'}
+              </Text>
             </View>
             <Icon name="chevronRight" size={16} color={colors.textSubtle} />
           </Pressable>
@@ -178,6 +210,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  offlineIcon: { backgroundColor: colors.surfaceMuted },
   voiceText: { flex: 1, gap: 2 },
   voiceTitle: { ...typography.heading, color: colors.text },
   voiceSubtitle: { ...typography.caption, color: colors.textMuted },
