@@ -164,4 +164,6 @@ export interface SingleTransactionConfirm {
 
 export interface VoiceConfirmRequest {
   transactions: SingleTransactionConfirm[];
+  /** ISO timestamp; only for recordings replayed from the offline queue. */
+  recorded_at?: string;
 }
