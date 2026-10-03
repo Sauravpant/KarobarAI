@@ -1,18 +1,18 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class CustomerCreateRequest(BaseModel):
     full_name: str
     phone: str | None = None
     address: str | None = None
-    credit_limit: float = 0.00
+    credit_limit: float = Field(0.00, ge=0)
 
 class CustomerUpdateRequest(BaseModel):
     full_name: str | None = None
     phone: str | None = None
     address: str | None = None
-    credit_limit: float | None = None
+    credit_limit: float | None = Field(None, ge=0)
     is_active: bool | None = None
 
 class CustomerResponse(BaseModel):
