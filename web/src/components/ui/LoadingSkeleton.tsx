@@ -23,11 +23,13 @@ export function PageSkeleton({ className }: PageSkeletonProps) {
   );
 }
 
-export function TableSkeleton({ rows = 5 }: { rows?: number }) {
+/** Section-level placeholder: a heading line and a few rows. */
+export function BlockSkeleton({ rows = 4, className }: { rows?: number; className?: string }) {
   return (
-    <div className="space-y-2 p-4">
+    <div className={cn('space-y-3', className)} aria-busy="true" aria-label="Loading">
+      <Skeleton className="h-5 w-40" />
       {Array.from({ length: rows }).map((_, i) => (
-        <Skeleton key={i} className="h-12 w-full rounded-md" />
+        <Skeleton key={i} className="h-4 w-full" />
       ))}
     </div>
   );

@@ -1,10 +1,5 @@
-import { useEffect } from 'react';
-import { Outlet, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '@/providers/AuthProvider';
-import { ROUTES, APP_NAME, APP_TAGLINE } from '@/constants/routes';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { useEffect, useState } from 'react';
+import { Outlet, Navigate, NavLink, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Receipt,
@@ -16,293 +11,244 @@ import {
   Settings,
   LogOut,
   Bell,
-  Search,
   Store,
   ChevronsUpDown,
   Plus,
   Tags,
-  Mic,
-  ChevronRight,
+  Menu,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { useQuery } from '@tanstack/react-query';
-import { getShops } from '@/services/shop.service';
-import { logout as logoutApi } from '@/services/auth.service';
-import { useMe } from '@/hooks/useAuth';
+import { useAuth } from '@/providers/AuthProvider';
+import { ROUTES, APP_NAME } from '@/constants/routes';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
-import { queryClient } from '@/lib/queryClient';
+import { useMe, useLogout } from '@/hooks/useAuth';
+import { useShops } from '@/hooks/useShops';
+import { useLowStockProducts } from '@/hooks/useInventory';
+import { useCreditSales } from '@/hooks/useTransactions';
+import { preload } from '@/routes/pages';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { qk, STALE } from '@/lib/queryKeys';
+import { getDashboardData } from '@/services/dashboard.service';
+import { getProducts } from '@/services/inventory.service';
+import { getCustomers } from '@/services/customer.service';
+import { getTransactionStats } from '@/services/transaction.service';
+import { cn } from '@/lib/utils';
 
-const sidebarNav = [
+const NAV = [
   { title: 'Dashboard', icon: LayoutDashboard, href: ROUTES.DASHBOARD },
   { title: 'Transactions', icon: Receipt, href: ROUTES.TRANSACTIONS },
   { title: 'Inventory', icon: Package, href: ROUTES.INVENTORY },
   { title: 'Categories', icon: Tags, href: ROUTES.CATEGORIES },
   { title: 'Customers', icon: Users, href: ROUTES.CUSTOMERS },
   { title: 'Credit Risk', icon: ShieldAlert, href: ROUTES.CREDIT_RISK },
-  { title: 'Demand Forecasting', icon: TrendingUp, href: ROUTES.DEMAND_FORECASTING },
-  { title: 'Vyapar Voice', icon: Mic, href: ROUTES.VYAPAR_VOICE },
+  { title: 'Demand Forecast', icon: TrendingUp, href: ROUTES.DEMAND_FORECASTING },
   { title: 'Reports', icon: BarChart3, href: ROUTES.REPORTS },
+  { title: 'Alerts', icon: Bell, href: ROUTES.NOTIFICATIONS },
+  { title: 'Settings', icon: Settings, href: ROUTES.SETTINGS },
 ];
 
+function Logo() {
+  return <img src="/karobar_ai_logo.png" alt={APP_NAME} className="h-10 w-auto" />;
+}
+
+/** Warm the page's main query on hover; skipped if cached data is still fresh. */
+function prefetchData(qc: QueryClient, shopId: string, href: string) {
+  if (!shopId) return;
+  const opts = { staleTime: STALE.live };
+  if (href === ROUTES.DASHBOARD) void qc.prefetchQuery({ queryKey: qk.dashboard(shopId), queryFn: () => getDashboardData(shopId), ...opts });
+  if (href === ROUTES.INVENTORY || href === ROUTES.DEMAND_FORECASTING)
+    void qc.prefetchQuery({ queryKey: qk.productList(shopId), queryFn: () => getProducts(shopId), ...opts });
+  if (href === ROUTES.CUSTOMERS || href === ROUTES.CREDIT_RISK)
+    void qc.prefetchQuery({ queryKey: qk.customerList(shopId), queryFn: () => getCustomers(shopId), staleTime: STALE.normal });
+  if (href === ROUTES.TRANSACTIONS)
+    void qc.prefetchQuery({ queryKey: qk.transactionStats(shopId), queryFn: () => getTransactionStats(shopId), ...opts });
+}
+
+function NavItems({ onNavigate, shopId }: { onNavigate?: () => void; shopId: string }) {
+  const qc = useQueryClient();
+  const warm = (href: string) => {
+    preload(href);
+    prefetchData(qc, shopId, href);
+  };
+  return (
+    <nav className="flex-1 overflow-y-auto py-3 px-3 flex flex-col gap-0.5 scrollbar-hide" aria-label="Main">
+      {NAV.map((item) => (
+        <NavLink
+          key={item.href}
+          to={item.href}
+          onClick={onNavigate}
+          onMouseEnter={() => warm(item.href)}
+          onFocus={() => warm(item.href)}
+          className={({ isActive }) =>
+            cn(
+              'group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-colors',
+              isActive ? 'bg-brand-soft text-brand nav-active-indicator' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+            )
+          }
+        >
+          {({ isActive }) => (
+            <>
+              <item.icon className={cn('size-4.5 shrink-0', isActive ? 'text-brand' : 'text-slate-400 group-hover:text-slate-600')} />
+              <span className="truncate">{item.title}</span>
+            </>
+          )}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
 export default function MainLayout() {
-  const { isAuthenticated, activeShop, user, logout, setActiveShop, setUserProfile } = useAuth();
+  const { isAuthenticated, activeShop, user, setActiveShop, setUserProfile } = useAuth();
   const location = useLocation();
-  const navigate = useNavigate();
+  const logout = useLogout();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const shopId = activeShop?.id ?? '';
+
+  // All hooks before any early return
   const { data: me } = useMe();
+  const { data: shops } = useShops();
+  const { data: lowStock } = useLowStockProducts(shopId);
+  const { data: overdue } = useCreditSales(shopId, 'overdue');
 
   useEffect(() => {
     if (me) setUserProfile(me);
   }, [me, setUserProfile]);
 
-  const handleLogout = async () => {
-    try {
-      await logoutApi();
-    } catch {
-      // still clear local session
-    }
-    logout();
-    queryClient.clear();
-    navigate(ROUTES.LOGIN);
-  };
+  if (!isAuthenticated) return <Navigate to={ROUTES.LOGIN} replace />;
+  if (!activeShop && location.pathname !== ROUTES.SHOP_SETUP) return <Navigate to={ROUTES.SHOP_SETUP} replace />;
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (!activeShop && location.pathname !== '/shop-setup') {
-    return <Navigate to="/shop-setup" replace />;
-  }
-
-  const { data: shops } = useQuery({
-    queryKey: ['shops'],
-    queryFn: getShops,
-    enabled: isAuthenticated,
-  });
-
-  const userInitials = user?.full_name
-    ? user.full_name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'SO';
-
-  const currentPage = sidebarNav.find(n => location.pathname.startsWith(n.href))?.title ?? 'Dashboard';
+  const initials =
+    user?.full_name
+      ?.split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2) ?? '?';
+  const alertCount = (lowStock?.length ?? 0) + (overdue?.length ?? 0);
+  const currentPage = NAV.find((n) => location.pathname.startsWith(n.href))?.title;
 
   return (
-    <div className="flex h-screen bg-[#F4F6F9] overflow-hidden font-sans">
-      {/* ===== SIDEBAR ===== */}
-      <aside className="w-64 bg-white flex flex-col flex-shrink-0 z-20 shadow-[1px_0_0_0_oklch(0.91_0.008_264)]">
-        {/* Logo */}
-        <div className="h-[65px] flex items-center px-5 shrink-0 border-b border-slate-100">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-gradient-to-br from-[#ff6b35] to-[#E3182D] rounded-lg flex items-center justify-center shadow-sm shadow-red-200">
-              <Store className="w-4 h-4 text-white" />
-            </div>
-            <div className="flex flex-col leading-none">
-              <span className="font-bold text-[15px] text-slate-900 tracking-tight">{APP_NAME}</span>
-              <span className="text-[10px] text-slate-400 font-medium tracking-widest uppercase mt-0.5">{APP_TAGLINE}</span>
-            </div>
-          </div>
-        </div>
+    <div className="flex h-screen bg-background overflow-hidden">
+      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:p-2 focus:bg-white focus:rounded">
+        Skip to content
+      </a>
 
-        {/* Nav Label */}
-        <div className="px-5 pt-5 pb-1">
-          <span className="text-[10px] font-semibold tracking-widest text-slate-400 uppercase">Navigation</span>
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:flex w-60 bg-white flex-col shrink-0 border-r border-border">
+        <div className="h-16 flex items-center px-5 shrink-0 border-b border-slate-100">
+          <Logo />
         </div>
-
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-1 px-3 flex flex-col gap-0.5 scrollbar-hide">
-          {sidebarNav.map((item) => (
-            <NavLink
-              key={item.title}
-              to={item.href}
-              className={({ isActive }) =>
-                cn(
-                  'group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all duration-200',
-                  isActive
-                    ? 'bg-gradient-to-r from-red-50 to-red-50/60 text-[#E3182D] shadow-none nav-active-indicator'
-                    : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <item.icon
-                    className={cn(
-                      'w-[18px] h-[18px] shrink-0 transition-colors duration-200',
-                      isActive ? 'text-[#E3182D]' : 'text-slate-400 group-hover:text-slate-600'
-                    )}
-                  />
-                  <span className="flex-1 truncate">{item.title}</span>
-                  {isActive && (
-                    <ChevronRight className="w-3.5 h-3.5 text-red-400 opacity-60" />
-                  )}
-                </>
-              )}
-            </NavLink>
-          ))}
-        </nav>
-
-        {/* Divider label */}
-        <div className="px-5 pb-1 pt-2">
-          <span className="text-[10px] font-semibold tracking-widest text-slate-400 uppercase">Account</span>
-        </div>
-
-        {/* Bottom Actions */}
-        <div className="px-3 pb-4 flex flex-col gap-0.5">
-          <NavLink
-            to={ROUTES.SETTINGS}
-            className={({ isActive }) =>
-              cn(
-                'group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all duration-200',
-                isActive
-                  ? 'bg-gradient-to-r from-red-50 to-red-50/60 text-[#E3182D] nav-active-indicator'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <Settings className={cn('w-[18px] h-[18px] shrink-0 transition-colors', isActive ? 'text-[#E3182D]' : 'text-slate-400 group-hover:text-slate-600')} />
-                Settings
-              </>
-            )}
-          </NavLink>
-          <button
-            onClick={handleLogout}
-            className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all duration-200 text-left w-full cursor-pointer"
-          >
-            <LogOut className="w-[18px] h-[18px] shrink-0 text-slate-400 group-hover:text-red-500 transition-colors" />
-            Logout
-          </button>
-        </div>
-
-        {/* User pill at bottom */}
-        <div className="mx-3 mb-4 p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-3">
-          <Avatar className="w-8 h-8 shrink-0">
-            <AvatarFallback className="bg-gradient-to-br from-[#ff6b35] to-[#E3182D] text-white text-xs font-bold">
-              {userInitials}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex flex-col min-w-0">
-            <span className="text-[13px] font-semibold text-slate-800 truncate leading-tight">
-              {user?.full_name || 'Store Owner'}
-            </span>
-            <span className="text-[11px] text-slate-400 leading-tight">Owner</span>
-          </div>
-        </div>
+        <NavItems shopId={shopId} />
       </aside>
 
-      {/* ===== MAIN CONTENT ===== */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Topbar */}
-        <header className="h-[65px] bg-white flex items-center justify-between px-6 shrink-0 z-10 shadow-[0_1px_0_0_oklch(0.91_0.008_264)]">
-          {/* Left: breadcrumb + shop switcher */}
-          <div className="flex items-center gap-4 flex-1">
-            {/* Breadcrumb */}
-            <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-sm">
-              <span className="font-medium text-slate-700">{currentPage}</span>
-            </div>
+      {/* Mobile sidebar */}
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" className="w-64 p-0 flex flex-col">
+          <SheetTitle className="h-16 flex items-center px-5 border-b border-slate-100">
+            <Logo />
+          </SheetTitle>
+          <NavItems shopId={shopId} onNavigate={() => setMobileNavOpen(false)} />
+        </SheetContent>
+      </Sheet>
 
-            {/* Search */}
-            <div className="flex items-center w-full max-w-xs relative ml-2">
-              <Search className="w-3.5 h-3.5 absolute left-3 text-slate-400 pointer-events-none" />
-              <Input
-                type="text"
-                placeholder="Search..."
-                className="pl-8 pr-3 h-9 bg-slate-50 border-slate-200 text-[13px] placeholder:text-slate-400 focus-visible:ring-red-100 focus-visible:border-red-300 rounded-lg w-full transition-all"
-              />
-            </div>
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <header className="h-16 bg-white flex items-center justify-between gap-3 px-4 sm:px-6 shrink-0 border-b border-border">
+          <div className="flex items-center gap-2 min-w-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu />
+            </Button>
+            {currentPage && <span className="font-semibold text-slate-700 truncate">{currentPage}</span>}
           </div>
 
-          {/* Right side */}
-          <div className="flex items-center gap-2.5">
-            {/* Shop Switcher */}
+          <div className="flex items-center gap-2">
             {activeShop && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="flex items-center gap-2 px-3 py-1.5 h-9 border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded-lg text-slate-700 text-[13px] font-medium transition-all cursor-pointer"
-                  >
-                    <div className="w-5 h-5 bg-gradient-to-br from-[#ff6b35] to-[#E3182D] rounded flex items-center justify-center">
-                      <Store className="w-3 h-3 text-white" />
-                    </div>
-                    <span className="max-w-[130px] truncate">{activeShop.shop_name}</span>
-                    <ChevronsUpDown className="w-3.5 h-3.5 text-slate-400" />
+                  <Button variant="outline" className="h-9 gap-2 px-2.5 max-w-52">
+                    <Store className="size-4 text-brand" />
+                    <span className="truncate">{activeShop.shop_name}</span>
+                    <ChevronsUpDown className="size-3.5 text-slate-400" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  className="w-56 bg-white border border-slate-200 shadow-xl shadow-slate-200/50 rounded-xl p-1.5 animate-scale-in"
-                >
-                  <div className="px-3 py-2 mb-1">
-                    <p className="text-[10px] font-semibold tracking-widest text-slate-400 uppercase">Your Shops</p>
-                  </div>
-                  {shops && shops.map((s) => (
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel className="text-[10px] tracking-widest text-slate-400 uppercase">Your shops</DropdownMenuLabel>
+                  {shops?.map((s) => (
                     <DropdownMenuItem
                       key={s.id}
                       onClick={() => setActiveShop(s)}
-                      className={cn(
-                        'flex items-center justify-between font-medium px-3 py-2 rounded-lg text-[13px] text-slate-700 hover:bg-slate-50 focus:bg-slate-50 outline-none transition-colors cursor-pointer',
-                        activeShop.id === s.id && 'text-red-600 bg-red-50 hover:bg-red-50 focus:bg-red-50'
-                      )}
+                      className={cn('justify-between', activeShop.id === s.id && 'text-brand font-semibold')}
                     >
                       <span className="truncate">{s.shop_name}</span>
-                      {activeShop.id === s.id && (
-                        <span className="w-1.5 h-1.5 bg-red-500 rounded-full shrink-0" />
-                      )}
+                      {activeShop.id === s.id && <span className="size-1.5 bg-brand rounded-full shrink-0" />}
                     </DropdownMenuItem>
                   ))}
-                  <DropdownMenuSeparator className="h-px bg-slate-100 my-1.5" />
-                  <DropdownMenuItem asChild className="px-3 py-2 rounded-lg text-[13px] outline-none">
-                    <Link
-                      to="/shop-setup"
-                      className="flex items-center gap-2 text-red-600 font-semibold hover:bg-red-50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-5 h-5 bg-red-100 rounded flex items-center justify-center">
-                        <Plus className="w-3 h-3 text-red-600" />
-                      </div>
-                      Add New Shop
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link to={ROUTES.SHOP_SETUP} className="text-brand font-semibold">
+                      <Plus className="size-4" /> Add shop
                     </Link>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
 
-            {/* Divider */}
-            <div className="h-6 w-px bg-slate-200 mx-1" />
+            <Button variant="ghost" size="icon" className="relative" asChild>
+              <Link to={ROUTES.NOTIFICATIONS} aria-label={`Alerts${alertCount ? ` (${alertCount})` : ''}`}>
+                <Bell className="size-4.5" />
+                {alertCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-brand text-white text-[10px] font-bold flex items-center justify-center">
+                    {alertCount > 99 ? '99+' : alertCount}
+                  </span>
+                )}
+              </Link>
+            </Button>
 
-            {/* Notifications */}
-            <Link to="/notifications">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="relative w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all cursor-pointer"
-              >
-                <Bell className="w-[18px] h-[18px]" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white pulse-dot" />
-              </Button>
-            </Link>
-
-            {/* Settings shortcut */}
-            <Link to={ROUTES.SETTINGS}>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all cursor-pointer"
-              >
-                <Settings className="w-[18px] h-[18px]" />
-              </Button>
-            </Link>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="rounded-full focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40" aria-label="Account menu">
+                  <Avatar className="size-8">
+                    <AvatarFallback className="bg-linear-to-br from-brand-accent to-brand text-white text-xs font-bold">
+                      {initials}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <p className="text-sm font-semibold truncate">{user?.full_name}</p>
+                  <p className="text-xs text-muted-foreground font-normal truncate">{user?.email}</p>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to={ROUTES.SETTINGS}>
+                    <Settings className="size-4" /> Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={logout} className="text-danger focus:text-danger">
+                  <LogOut className="size-4" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-auto bg-[#F4F6F9] animate-fade-in">
+        <main id="main" className="flex-1 overflow-auto animate-fade-in">
           <Outlet />
         </main>
       </div>
