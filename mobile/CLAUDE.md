@@ -36,6 +36,10 @@ src/
 
 Use the existing backend endpoints and response shapes. Do not design a new API surface.
 
+## Offline recordings
+
+`features/voice/offline-store.ts` keeps recordings in `Paths.document/offline-voice/`, named `<shopId>_<recordedAt>_<durationMs>.m4a` (the folder is the queue, listed oldest first). Audio is saved there when `/voice/transcribe` fails with a network error (status 0), or recorded directly on `src/app/offline.tsx`. "Process" opens `voice?recording=<uri>&recordedAt=<ms>`, which runs the normal flow, sends `recorded_at` on confirm so the sale is dated to when it was spoken, then deletes the file.
+
 ## Daily brief
 
 `src/app/brief.tsx` (plus a hero card on home) calls `GET /shops/{shop_id}/dashboard/brief`. It shows the transcript and the AI insight line, and reuses `ConfirmationPlayer` for audio from `.../brief/audio`. Audio is synthesized on every call (about 10 s), so render the text first and load the audio after.
@@ -50,7 +54,6 @@ Use the existing backend endpoints and response shapes. Do not design a new API 
 ## Open items
 
 - Confirm that `.m4a` uploads work with the backend's `pydub` preprocessing and ElevenLabs STT. If not, record `.wav` or `.mp3` instead. The endpoint does not change.
-- Offline queue for voice transactions. The backend has no sync endpoint yet. Treat queued transactions as an ordered append log and replay them in timestamp order. Never use last-write-wins for stock or credit values.
 - Simple credit-score badge (low/medium/high) from the per-customer credit-risk endpoint.
 - Quick inventory and customer (khata) lookup.
 - Push notifications (restock, overdue credit). Blocked: the backend has no notification system.
