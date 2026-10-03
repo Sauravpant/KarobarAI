@@ -47,6 +47,9 @@ from app.services import product_service, transaction_service, customer_service,
 logger = logging.getLogger(__name__)
 
 TTS_VOICE = "ne-NP-SagarNeural"
+ELEVENLABS_VOICE_ID = "kLhAstPcnnPxqzk6gS5i"
+ELEVENLABS_MODEL = "eleven_v4"
+ELEVENLABS_LANGUAGE = "ne"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_MODEL = "bulbul:v3"
 SARVAM_SPEAKER = "shubh"
@@ -123,6 +126,22 @@ def sanitize_extracted_response(
         raw_transcript=raw_transcript,
     )
 
+def _elevenlabs_tts_sync(text: str) -> bytes:
+    client = _get_stt_client()
+    if client is None:
+        raise ValueError("ELEVEN_LABS_API_KEY is not configured")
+    response = client.text_to_speech.convert(
+        voice_id=ELEVENLABS_VOICE_ID,
+        text=text,
+        model_id=ELEVENLABS_MODEL,
+        language_code=ELEVENLABS_LANGUAGE,
+        output_format="mp3_44100_128",
+    )
+    return b"".join(response)
+
+async def _elevenlabs_tts(text: str) -> bytes:
+    return await asyncio.to_thread(_elevenlabs_tts_sync, text)
+
 async def _sarvam_tts(text: str) -> bytes:
     if len(text) > SARVAM_MAX_CHARS:
         raise ValueError(f"text too long for Sarvam ({len(text)} > {SARVAM_MAX_CHARS})")
@@ -162,10 +181,10 @@ def _gtts_sync(text: str) -> bytes:
 async def _gtts(text: str) -> bytes:
     return await asyncio.to_thread(_gtts_sync, text)
 
-_TTS_PROVIDERS = [("sarvam", _sarvam_tts), ("edge-tts", _edge_tts), ("gtts", _gtts)]
+_TTS_PROVIDERS = [("edge-tts", _edge_tts), ("sarvam", _sarvam_tts), ("elevenlabs", _elevenlabs_tts), ("gtts", _gtts)]
 
 async def synthesize_speech(text: str) -> bytes:
-    """Sarvam -> Edge-TTS -> gTTS. All return mp3."""
+    """Edge-TTS -> Sarvam -> ElevenLabs -> gTTS. All return mp3."""
     errors = []
     for name, call in _TTS_PROVIDERS:
         try:
