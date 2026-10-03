@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.ml_manager import get_demand_forecaster
+from app.core.clock import nepal_today
 from app.models.product import Product
 from app.models.shop import Shop
 from app.models.transaction import Transaction
@@ -77,7 +78,7 @@ def get_product_last_sales_date(
     )
     if last_item and last_item[0] is not None:
         return last_item[0].date().isoformat()
-    return datetime.now(timezone.utc).date().isoformat()
+    return nepal_today().isoformat()
 
 def _build_product_sales_history(
     db: Session, shop_id: uuid.UUID, product_id: uuid.UUID, last_date_str: str, num_days: int

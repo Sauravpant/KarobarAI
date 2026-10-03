@@ -13,6 +13,7 @@ from app.models.user import User
 from app.models.enums import PaymentType, CreditStatus, TransactionType
 from app.schemas.transaction import TransactionCreateRequest, CreditSaleUpdateRequest
 from app.services.shop_service import get_shop_by_id
+from app.core.clock import nepal_today
 
 def create_transaction(
     db: Session,
@@ -142,7 +143,7 @@ def create_transaction(
     return transaction
 
 def get_transaction_stats(db: Session, shop_id: uuid.UUID) -> dict:
-    today = datetime.now(timezone.utc).date()
+    today = nepal_today()
     nepal_time = Transaction.created_at + text("interval '5 hours 45 minutes'")
 
     today_sales = (

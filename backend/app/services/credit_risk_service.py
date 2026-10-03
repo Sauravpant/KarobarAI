@@ -10,6 +10,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.ml_manager import get_credit_risk_predictor
+from app.core.clock import nepal_today
 from app.models.customer import Customer
 from app.models.credit_sale import CreditSale
 from app.models.transaction import Transaction
@@ -180,7 +181,7 @@ LIMIT_ROUNDING = 100
 
 
 def _has_overdue(db: Session, customer_id: uuid.UUID) -> bool:
-    today = date.today()
+    today = nepal_today()
     return db.query(CreditSale.id).filter(
         CreditSale.customer_id == customer_id,
         CreditSale.status != CreditStatus.PAID,

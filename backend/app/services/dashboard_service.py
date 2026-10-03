@@ -21,13 +21,14 @@ from app.schemas.dashboard import (
     InventoryStatus,
 )
 from app.services.shop_service import get_shop_by_id
+from app.core.clock import nepal_today
 
 NEPAL_TIMESTAMP = Transaction.created_at + sa_text("interval '5 hours 45 minutes'")
 
 def get_dashboard(db: Session, user: User, shop_id: uuid.UUID) -> DashboardDetail:
     get_shop_by_id(db, user, shop_id)
 
-    today = datetime.now().date()
+    today = nepal_today()
 
     total_products = db.query(sa_func.count(Product.id)).filter(
         Product.shop_id == shop_id, Product.is_active == True
