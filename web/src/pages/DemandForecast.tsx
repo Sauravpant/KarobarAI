@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useShopId } from "@/providers/AuthProvider";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { errorMessage } from "@/lib/queryClient";
-import { formatDate } from "@/utils/format";
 import { useProducts } from "@/hooks/useInventory";
 import {
   useDemandForecast7Days,
@@ -17,7 +16,6 @@ import { DriverBars } from "@/components/charts/DriverBars";
 import { DEMAND_GROUPS, GROUP_COLORS, demandFeature, groupTotals } from "@/lib/shapGroups";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState, EmptyState } from "@/components/ui/StateComponents";
-import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +30,7 @@ import {
   Bar,
   Cell,
   ReferenceLine,
+  LabelList,
 } from "recharts";
 import {
   TrendingUp,
@@ -50,16 +49,36 @@ type TooltipProps = {
   payload?: { value: number; payload: { confidence: number } }[];
 };
 
+const tooltipStyle = { fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0", boxShadow: "0 8px 24px -8px rgb(15 23 42 / 0.15)" };
+const axisTick = { fontSize: 12, fill: "#64748b" };
+const LOW_CONFIDENCE = 60;
+
 const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null;
+  const conf = payload[0].payload.confidence;
   return (
-    <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3">
-      <p className="text-xs font-semibold text-slate-600">{label}</p>
-      <p className="text-xs text-brand">Predicted: {Number(payload[0].value).toFixed(1)} units</p>
-      <p className="text-xs text-slate-500">Confidence: {payload[0].payload.confidence}%</p>
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2.5 space-y-0.5">
+      <p className="text-xs font-semibold text-slate-700">{label}</p>
+      <p className="text-sm font-bold text-slate-900 tabular">{Number(payload[0].value).toFixed(1)} units</p>
+      <p className={cn("text-xs tabular", conf < LOW_CONFIDENCE ? "text-amber-600" : "text-slate-500")}>
+        {conf}% confidence
+      </p>
     </div>
   );
 };
+
+function LegendDot({ color, label, hollow }: { color: string; label: string; hollow?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+      <span
+        className="size-2.5 rounded-full shrink-0"
+        style={hollow ? { border: `2px solid ${color}` } : { background: color }}
+        aria-hidden
+      />
+      {label}
+    </span>
+  );
+}
 
 export default function DemandForecast() {
   const shopId = useShopId();
@@ -107,6 +126,7 @@ export default function DemandForecast() {
   }, [chartData]);
 
   const totalPredicted = chartData.reduce((s, d) => s + d.units, 0);
+  const avgDaily = chartData.length ? totalPredicted / chartData.length : 0;
 
   if (!shopId || isLoading) return <PageSkeleton />;
   if (isError) return <ErrorState onRetry={refetch} />;
@@ -192,7 +212,7 @@ export default function DemandForecast() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
+        <div className="mt-6 grid gap-3 grid-cols-2 md:grid-cols-4">
           <div className="rounded-xl border border-white/10 bg-white/10 p-4">
             <p className="text-[11px] uppercase tracking-[0.24em] text-slate-300">Current stock</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stockSummary?.current_stock ?? selected?.stock_quantity ?? 0}</p>
@@ -205,15 +225,20 @@ export default function DemandForecast() {
             <p className="text-[11px] uppercase tracking-[0.24em] text-slate-300">Next 7 days</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stockSummary?.next_7_day_forecast ?? totalPredicted.toFixed(0)}</p>
           </div>
+          <div className="rounded-xl border border-white/10 bg-white/10 p-4">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-slate-300">Peak day</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{peakDay ? peakDay.units : "—"}</p>
+            <p className="text-xs text-slate-400">{peakDay?.date ?? ""}</p>
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap gap-3">
           {stockSummary && (
             <>
-              <div className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-semibold text-emerald-200">
+              <div className={cn("rounded-full px-3 py-1 text-sm font-semibold", stockSummary.recommended_restock ? "bg-amber-500/20 text-amber-200" : "bg-emerald-500/20 text-emerald-200")}>
                 {stockSummary.recommended_restock ? `Restock ${stockSummary.recommended_restock} units` : "No urgent restock needed"}
               </div>
-              <div className="rounded-full bg-red-500/20 px-3 py-1 text-sm font-semibold text-red-200">
+              <div className={cn("rounded-full px-3 py-1 text-sm font-semibold", stockSummary.stock_gap_for_next_7_days ? "bg-red-500/20 text-red-200" : "bg-emerald-500/20 text-emerald-200")}>
                 {stockSummary.stock_gap_for_next_7_days ? `Short by ${stockSummary.stock_gap_for_next_7_days} units over 7 days` : "Covered for 7 days"}
               </div>
             </>
@@ -221,41 +246,6 @@ export default function DemandForecast() {
         </div>
       </div>
 
-      {/* ── Stat cards ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          title="Product"
-          value={selected?.product_name ?? "—"}
-          subtitle={`Stock: ${selected?.stock_quantity ?? 0}`}
-          icon={Package}
-          iconBg="bg-red-50/80"
-          iconColor="text-brand"
-        />
-        <StatCard
-          title="Tomorrow"
-          value={nextDay ? nextDay.predicted_units.toFixed(1) : "—"}
-          subtitle={nextDay ? formatDate(nextDay.forecast_date) : "—"}
-          icon={TrendingUp}
-          iconBg="bg-emerald-50"
-          iconColor="text-emerald-600"
-        />
-        <StatCard
-          title="7-Day Demand"
-          value={totalPredicted.toFixed(0)}
-          subtitle="Predicted units"
-          icon={TrendingUp}
-          iconBg="bg-red-50"
-          iconColor="text-red-600"
-        />
-        <StatCard
-          title="Peak Day"
-          value={peakDay ? String(peakDay.units) : "—"}
-          subtitle={peakDay?.date ?? modelName}
-          icon={AlertTriangle}
-          iconBg="bg-amber-50"
-          iconColor="text-amber-600"
-        />
-      </div>
       {forecastLoading ?
         <div className="space-y-6" aria-busy="true" aria-label="Generating forecast">
           <Skeleton className="h-80 rounded-xl" />
@@ -280,56 +270,57 @@ export default function DemandForecast() {
       : <>
           {/* ── 7-day area chart ── */}
           <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6 transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
-            <div className="mb-5">
-              <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                Next 7 Days — {selected?.product_name}
-              </h2>
-              <p className="text-xs text-slate-500">
-                Predicted units sold per day. Hollow points: model confidence below 60%.
-              </p>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 tracking-tight">
+                  Daily demand, next 7 days
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Predicted units sold per day for {selected?.product_name}.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <LegendDot color="#E3182D" label="Predicted units" />
+                <LegendDot color="#E3182D" label={`Confidence < ${LOW_CONFIDENCE}%`} hollow />
+                <LegendDot color="#94a3b8" label={`Daily avg ${avgDaily.toFixed(1)}`} />
+              </div>
             </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={chartData}>
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={chartData} margin={{ top: 24, right: 16, bottom: 0, left: -8 }}>
                 <defs>
                   <linearGradient id="colorDemand" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#E3182D" stopOpacity={0.12} />
+                    <stop offset="5%" stopColor="#E3182D" stopOpacity={0.18} />
                     <stop offset="95%" stopColor="#E3182D" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 12, fill: "#94a3b8" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: "#94a3b8" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <Tooltip content={<CustomTooltip />} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" vertical={false} />
+                <XAxis dataKey="date" tick={axisTick} axisLine={false} tickLine={false} dy={6} />
+                <YAxis tick={axisTick} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#cbd5e1", strokeDasharray: "4 4" }} />
+                <ReferenceLine y={avgDaily} stroke="#94a3b8" strokeDasharray="4 4" />
                 <Area
                   type="monotone"
                   dataKey="units"
                   stroke="#E3182D"
                   strokeWidth={2.5}
                   fill="url(#colorDemand)"
+                  activeDot={{ r: 6, stroke: "#fff", strokeWidth: 2 }}
                   dot={(props: { cx?: number; cy?: number; index?: number }) => {
-                    const low = (chartData[props.index ?? 0]?.confidence ?? 100) < 60;
+                    const low = (chartData[props.index ?? 0]?.confidence ?? 100) < LOW_CONFIDENCE;
                     return (
                       <circle
                         key={props.index}
                         cx={props.cx}
                         cy={props.cy}
-                        r={low ? 4 : 3}
+                        r={4.5}
                         fill={low ? "#fff" : "#E3182D"}
-                        stroke="#E3182D"
-                        strokeWidth={low ? 2 : 0}
+                        stroke={low ? "#E3182D" : "#fff"}
+                        strokeWidth={2}
                       />
                     );
-                  }}
-                />
+                  }}>
+                  <LabelList dataKey="units" position="top" offset={12} style={{ fontSize: 11, fontWeight: 600, fill: "#334155" }} />
+                </Area>
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -339,30 +330,41 @@ export default function DemandForecast() {
             {/* Cumulative demand against what's on the shelf */}
             <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6">
               <h2 className="text-base font-bold text-slate-900 tracking-tight">Cumulative demand vs stock</h2>
-              <p className="text-xs text-slate-500 mb-4">
+              <p className={cn("text-xs mb-3", runsOutOn ? "text-red-600 font-medium" : "text-slate-500")}>
                 {runsOutOn
                   ? `At this rate current stock (${currentStock}) runs out around ${runsOutOn}.`
                   : `Current stock (${currentStock}) covers the forecast week.`}
               </p>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
+                <LegendDot color="#10b981" label="Covered by stock" />
+                <LegendDot color="#E3182D" label="Beyond stock" />
+                <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                  <span className="w-4 border-t-2 border-dashed border-amber-500" aria-hidden /> Stock {currentStock}
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={chartData} margin={{ top: 20, right: 8, bottom: 0, left: -8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" vertical={false} />
+                  <XAxis dataKey="date" tick={{ ...axisTick, fontSize: 11 }} axisLine={false} tickLine={false} interval={0} />
+                  <YAxis tick={{ ...axisTick, fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
                   <Tooltip
+                    cursor={{ fill: "#f8fafc" }}
                     formatter={(value: unknown) => [`${Number(value)} units`, "Cumulative demand"]}
-                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                    contentStyle={tooltipStyle}
                   />
+                  {/* extendDomain keeps the stock line visible when stock is above every bar */}
                   <ReferenceLine
                     y={currentStock}
                     stroke="#d97706"
-                    strokeDasharray="4 4"
-                    label={{ value: "Stock", position: "insideTopRight", fontSize: 11, fill: "#d97706" }}
+                    strokeWidth={2}
+                    strokeDasharray="5 4"
+                    ifOverflow="extendDomain"
                   />
-                  <Bar dataKey="cumulative" radius={[4, 4, 0, 0]}>
+                  <Bar dataKey="cumulative" radius={[6, 6, 0, 0]} maxBarSize={36}>
                     {chartData.map((d) => (
-                      <Cell key={d.date} fill={d.cumulative > currentStock ? "#E3182D" : "#fca5a5"} />
+                      <Cell key={d.date} fill={d.cumulative > currentStock ? "#E3182D" : "#10b981"} />
                     ))}
+                    <LabelList dataKey="cumulative" position="top" style={{ fontSize: 11, fontWeight: 600, fill: "#334155" }} />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -371,24 +373,31 @@ export default function DemandForecast() {
             {/* Forecast detail table */}
             <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6 transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50 flex flex-col justify-between">
               <div>
-                <h2 className="text-base font-bold text-slate-900 mb-4 tracking-tight">
-                  Forecast Details
+                <h2 className="text-base font-bold text-slate-900 tracking-tight">
+                  Forecast details
                 </h2>
+                <p className="text-xs text-slate-500 mb-3">Units per day. Bar length is relative to the peak day.</p>
                 <div className="space-y-1 divide-y divide-slate-100">
                   {chartData.map((d) => (
                     <div
                       key={d.date}
                       className="flex items-center justify-between py-2.5">
-                      <span className="text-sm font-semibold text-slate-600">
+                      <span className="w-16 shrink-0 text-sm font-semibold text-slate-600">
                         {d.date}
                       </span>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-bold text-slate-900">
-                          {d.units} units
+                      <div className="mx-3 h-2 flex-1 rounded-full bg-slate-100 overflow-hidden" aria-hidden>
+                        <div
+                          className={cn("h-full rounded-full", d === peakDay ? "bg-brand" : "bg-red-300")}
+                          style={{ width: `${peakDay?.units ? (d.units / peakDay.units) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="w-12 text-right text-sm font-bold text-slate-900 tabular">
+                          {d.units}
                         </span>
                         <Badge
                           className={cn(
-                            "text-[10px] border-0 px-2 py-0.5 shadow-none font-semibold rounded-md",
+                            "w-16 justify-center text-[10px] border-0 px-2 py-0.5 shadow-none font-semibold rounded-md tabular",
                             d.confidence >= 70 ?
                               "bg-emerald-100 text-emerald-700"
                             : "bg-amber-100 text-amber-700",
@@ -433,16 +442,23 @@ export default function DemandForecast() {
                 <p className="text-xs text-slate-500 mt-4 mb-4">
                   Confidence returned by the model for each forecast day. Lower values mean a wider likely range.
                 </p>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#94a3b8" }} />
-                    <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 10, fill: "#94a3b8" }} />
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={chartData} margin={{ top: 20, right: 32, bottom: 0, left: -8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" vertical={false} />
+                    <XAxis dataKey="date" tick={{ ...axisTick, fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis domain={[0, 100]} unit="%" tick={{ ...axisTick, fontSize: 11 }} axisLine={false} tickLine={false} />
                     <Tooltip
+                      cursor={{ fill: "#f8fafc" }}
                       formatter={(value: unknown) => [`${Number(value)}%`, "Confidence"]}
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                      contentStyle={tooltipStyle}
                     />
-                    <Bar dataKey="confidence" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <ReferenceLine y={LOW_CONFIDENCE} stroke="#d97706" strokeDasharray="4 4" label={{ value: `${LOW_CONFIDENCE}%`, position: "right", fontSize: 11, fill: "#d97706" }} />
+                    <Bar dataKey="confidence" radius={[6, 6, 0, 0]} maxBarSize={36}>
+                      {chartData.map((d) => (
+                        <Cell key={d.date} fill={d.confidence < LOW_CONFIDENCE ? "#f59e0b" : "#10b981"} />
+                      ))}
+                      <LabelList dataKey="confidence" position="top" formatter={(v: unknown) => `${v}%`} style={{ fontSize: 11, fontWeight: 600, fill: "#334155" }} />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>

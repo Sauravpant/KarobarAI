@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useShopId, useAuth } from '@/providers/AuthProvider';
 import { useDashboard } from '@/hooks/useDashboard';
 import { useCustomers } from '@/hooks/useCustomers';
+import { useCreditSales } from '@/hooks/useTransactions';
 import { PageSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ErrorState, EmptyState } from '@/components/ui/StateComponents';
 import { StatCard } from '@/components/ui/StatCard';
@@ -50,6 +51,7 @@ export default function Dashboard() {
   const { activeShop, user } = useAuth();
   const { data, isLoading, isError, refetch } = useDashboard(shopId);
   const { data: customers } = useCustomers(shopId);
+  const creditQ = useCreditSales(shopId);
 
   if (!shopId || isLoading) return <PageSkeleton />;
   if (isError || !data) return <ErrorState message="Could not load the dashboard." onRetry={refetch} />;
@@ -69,6 +71,15 @@ export default function Dashboard() {
     .filter((c) => c.current_outstanding_balance > 0)
     .sort((a, b) => b.current_outstanding_balance - a.current_outstanding_balance)
     .slice(0, 5);
+  // Overdue means status overdue or unpaid past its due date, same rule as the backend credit-limit check
+  const today = new Date().toLocaleDateString('en-CA');
+  const credit = { overdue: { count: 0, amount: 0 }, pending: { count: 0, amount: 0 } };
+  for (const s of creditQ.data ?? []) {
+    if (s.status === 'paid') continue;
+    const bucket = s.status === 'overdue' || s.due_date < today ? credit.overdue : credit.pending;
+    bucket.count += 1;
+    bucket.amount += s.credit_amount;
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6 animate-fade-in">
@@ -242,6 +253,30 @@ export default function Dashboard() {
                   <span className="text-[13px] font-bold tabular">{count}</span>
                 </div>
               ))}
+            </div>
+          </Section>
+
+          <Section title="Credit status" action={<SectionLink to={ROUTES.TRANSACTIONS}>Transactions</SectionLink>}>
+            <div className="p-4 space-y-2">
+              {creditQ.isLoading ? (
+                <p className="text-sm text-muted-foreground text-center py-4">Loading…</p>
+              ) : creditQ.isError ? (
+                <ErrorState message="Could not load credit sales." onRetry={creditQ.refetch} />
+              ) : credit.overdue.count + credit.pending.count === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No unpaid credit</p>
+              ) : (
+                [
+                  { label: 'Overdue', ...credit.overdue, cls: 'bg-danger-soft text-red-800' },
+                  { label: 'Pending, not yet due', ...credit.pending, cls: 'bg-warning-soft text-amber-800' },
+                ].map(({ label, count, amount, cls }) => (
+                  <div key={label} className={cn('flex items-center justify-between px-4 py-2.5 rounded-xl', cls)}>
+                    <span className="text-[13px] font-semibold">
+                      {label} <span className="font-medium opacity-80 tabular">({count})</span>
+                    </span>
+                    <span className="text-[13px] font-bold tabular">{formatCurrency(amount)}</span>
+                  </div>
+                ))
+              )}
             </div>
           </Section>
 
