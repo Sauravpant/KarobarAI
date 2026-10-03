@@ -1,45 +1,39 @@
-import api from "@/lib/api";
+import api from '@/lib/api';
 import type {
   ApiResponse,
   CreditRiskExplanation,
-  CreditRiskFeatures,
+  CreditLimitSuggestion,
   CreditRiskGlobalImportance,
-  CreditRiskPrediction,
   DemandForecastDay,
-  DemandForecastExplainDay,
-  DemandForecastRequest,
   DemandGlobalImportance,
   DemandStockSummary,
-} from "@/types";
+} from '@/types';
 
-const KATHMANDU_TIME_ZONE = "Asia/Kathmandu";
+/**
+ * Only the shop-scoped ML routes are used here: the backend builds the feature
+ * vectors / sales history from the database. The raw-feature routes under
+ * /ml/credit-risk/predict* and /ml/demand/predict*|explain* need hand-built
+ * inputs (18 credit features, 21+ days of history) and have no web UI.
+ */
 
-function getKathmanduDateString(reference = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: KATHMANDU_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(reference);
+function kathmanduToday() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kathmandu',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
-export interface DemandProductPayload {
-  last_date: string;
-  sales_history?: number[];
-  transactions_history?: number[];
-}
+// ── Credit risk ───────────────────────────────────────────────────────────────
 
-// ── Credit Risk — per customer ────────────────────────────────────────────────
-
-export async function predictCreditRiskForCustomer(
+/** Backend recomputes the suggestion and writes it to customers.credit_limit. */
+export async function applySuggestedCreditLimit(
   shopId: string,
-  customerId: string,
-  save = true,
-): Promise<CreditRiskPrediction> {
-  const res = await api.post<ApiResponse<CreditRiskPrediction>>(
-    `/shops/${shopId}/customers/${customerId}/credit-risk/predict`,
-    null,
-    { params: { save } },
+  customerId: string
+): Promise<CreditLimitSuggestion & { previous_credit_limit: number }> {
+  const res = await api.post<ApiResponse<CreditLimitSuggestion & { previous_credit_limit: number }>>(
+    `/shops/${shopId}/customers/${customerId}/credit-risk/apply-limit`
   );
   return res.data.data;
 }
@@ -47,140 +41,40 @@ export async function predictCreditRiskForCustomer(
 export async function explainCreditRiskForCustomer(
   shopId: string,
   customerId: string,
-  topK = 5,
+  topK = 5
 ): Promise<CreditRiskExplanation> {
   const res = await api.post<ApiResponse<CreditRiskExplanation>>(
     `/shops/${shopId}/customers/${customerId}/credit-risk/explain`,
     null,
-    { params: { top_k: topK } },
-  );
-  return res.data.data;
-}
-
-// ── Credit Risk — generic ML ──────────────────────────────────────────────────
-
-export async function predictCreditRisk(
-  features: CreditRiskFeatures,
-): Promise<CreditRiskPrediction> {
-  const res = await api.post<ApiResponse<CreditRiskPrediction>>(
-    "/ml/credit-risk/predict",
-    features,
-  );
-  return res.data.data;
-}
-
-export async function predictCreditRiskProbability(
-  features: CreditRiskFeatures,
-): Promise<Record<string, number>> {
-  const res = await api.post<ApiResponse<Record<string, number>>>(
-    "/ml/credit-risk/predict-probability",
-    features,
-  );
-  return res.data.data;
-}
-
-export async function explainCreditRisk(
-  features: CreditRiskFeatures,
-  topK = 5,
-): Promise<CreditRiskExplanation> {
-  const res = await api.post<ApiResponse<CreditRiskExplanation>>(
-    "/ml/credit-risk/explain",
-    features,
-    { params: { top_k: topK } },
+    { params: { top_k: topK } }
   );
   return res.data.data;
 }
 
 export async function getCreditRiskGlobalImportance(): Promise<CreditRiskGlobalImportance> {
-  const res = await api.get<ApiResponse<CreditRiskGlobalImportance>>(
-    "/ml/credit-risk/global-importance",
-  );
+  const res = await api.get<ApiResponse<CreditRiskGlobalImportance>>('/ml/credit-risk/global-importance');
   return res.data.data;
 }
 
-export async function getCreditRiskModelInfo(): Promise<
-  Record<string, unknown>
-> {
-  const res = await api.get<ApiResponse<Record<string, unknown>>>(
-    "/ml/credit-risk/model-info",
-  );
+export async function getCreditRiskModelInfo(): Promise<Record<string, unknown>> {
+  const res = await api.get<ApiResponse<Record<string, unknown>>>('/ml/credit-risk/model-info');
   return res.data.data;
 }
 
-// ── Demand — per product ──────────────────────────────────────────────────────
+// ── Demand ────────────────────────────────────────────────────────────────────
 
-export async function getDemandForecastNextDay(
-  shopId: string,
-  productId: string,
-  payload?: Partial<DemandProductPayload>,
-): Promise<DemandForecastDay> {
-  const body: DemandProductPayload = {
-    last_date: payload?.last_date ?? getKathmanduDateString(),
-    sales_history: payload?.sales_history,
-    transactions_history: payload?.transactions_history,
-  };
+export async function getDemandForecastNextDay(shopId: string, productId: string): Promise<DemandForecastDay> {
   const res = await api.post<ApiResponse<DemandForecastDay>>(
     `/shops/${shopId}/demand/products/${productId}/predict-next-day`,
-    body,
+    { last_date: kathmanduToday() }
   );
   return res.data.data;
 }
 
-export async function getDemandForecastNext7Days(
-  shopId: string,
-  productId: string,
-  payload?: Partial<DemandProductPayload>,
-): Promise<DemandForecastDay[]> {
-  const body: DemandProductPayload = {
-    last_date: payload?.last_date ?? getKathmanduDateString(),
-    sales_history: payload?.sales_history,
-    transactions_history: payload?.transactions_history,
-  };
+export async function getDemandForecastNext7Days(shopId: string, productId: string): Promise<DemandForecastDay[]> {
   const res = await api.post<ApiResponse<DemandForecastDay[]>>(
     `/shops/${shopId}/demand/products/${productId}/predict-next-7-days`,
-    body,
-  );
-  return res.data.data;
-}
-
-// ── Demand — generic ML ───────────────────────────────────────────────────────
-
-export async function predictDemandNextDay(
-  payload: DemandForecastRequest,
-): Promise<DemandForecastDay> {
-  const res = await api.post<ApiResponse<DemandForecastDay>>(
-    "/ml/demand/predict-next-day",
-    payload,
-  );
-  return res.data.data;
-}
-
-export async function predictDemandNext7Days(
-  payload: DemandForecastRequest,
-): Promise<DemandForecastDay[]> {
-  const res = await api.post<ApiResponse<DemandForecastDay[]>>(
-    "/ml/demand/predict-next-7-days",
-    payload,
-  );
-  return res.data.data;
-}
-
-export async function explainDemandNextDay(
-  payload: DemandForecastRequest,
-): Promise<DemandForecastExplainDay> {
-  const res = await api.post<ApiResponse<DemandForecastExplainDay>>(
-    "/ml/demand/explain-next-day",
-    payload,
-  );
-  return res.data.data;
-}
-
-export async function explainDemandNext7Days(
-  payload: DemandForecastRequest,
-): Promise<DemandForecastExplainDay[]> {
-  const res = await api.post<ApiResponse<DemandForecastExplainDay[]>>(
-    "/ml/demand/explain-next-7-days",
-    payload,
+    { last_date: kathmanduToday() }
   );
   return res.data.data;
 }
@@ -188,26 +82,21 @@ export async function explainDemandNext7Days(
 export async function getDemandStockSummary(
   shopId: string,
   productId: string,
-  lastDate?: string,
+  lastDate?: string
 ): Promise<DemandStockSummary> {
-  const params = lastDate ? { last_date: lastDate } : undefined;
   const res = await api.get<ApiResponse<DemandStockSummary>>(
     `/shops/${shopId}/demand/products/${productId}/stock-summary`,
-    { params },
+    { params: lastDate ? { last_date: lastDate } : undefined }
   );
   return res.data.data;
 }
 
 export async function getDemandModelInfo(): Promise<Record<string, unknown>> {
-  const res = await api.get<ApiResponse<Record<string, unknown>>>(
-    "/ml/demand/model-info",
-  );
+  const res = await api.get<ApiResponse<Record<string, unknown>>>('/ml/demand/model-info');
   return res.data.data;
 }
 
 export async function getDemandGlobalImportance(): Promise<DemandGlobalImportance> {
-  const res = await api.get<ApiResponse<DemandGlobalImportance>>(
-    "/ml/demand/global-importance",
-  );
+  const res = await api.get<ApiResponse<DemandGlobalImportance>>('/ml/demand/global-importance');
   return res.data.data;
 }

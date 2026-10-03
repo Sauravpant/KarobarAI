@@ -17,11 +17,6 @@ export async function getLowStockProducts(shopId: string): Promise<Product[]> {
   return res.data.data;
 }
 
-export async function getProduct(shopId: string, productId: string): Promise<Product> {
-  const res = await api.get<ApiResponse<Product>>(`/shops/${shopId}/products/${productId}`);
-  return res.data.data;
-}
-
 export async function createProduct(shopId: string, payload: CreateProductPayload): Promise<Product> {
   const res = await api.post<ApiResponse<Product>>(`/shops/${shopId}/products/`, payload);
   return res.data.data;

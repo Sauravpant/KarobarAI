@@ -11,11 +11,6 @@ export async function getCustomers(shopId: string): Promise<Customer[]> {
   return res.data.data;
 }
 
-export async function getCustomer(shopId: string, customerId: string): Promise<Customer> {
-  const res = await api.get<ApiResponse<Customer>>(`/shops/${shopId}/customers/${customerId}`);
-  return res.data.data;
-}
-
 export async function createCustomer(shopId: string, payload: CreateCustomerPayload): Promise<Customer> {
   const res = await api.post<ApiResponse<Customer>>(`/shops/${shopId}/customers/`, payload);
   return res.data.data;
