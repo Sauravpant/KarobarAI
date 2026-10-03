@@ -1,11 +1,27 @@
 import { useQuery } from '@tanstack/react-query';
-import { getDashboardData } from '@/services/dashboard.service';
+import { getDashboardData, getDailyBrief } from '@/services/dashboard.service';
+import { qk, STALE } from '@/lib/queryKeys';
 
 export function useDashboard(shopId: string) {
   return useQuery({
-    queryKey: ['dashboard', shopId],
+    queryKey: qk.dashboard(shopId),
     queryFn: () => getDashboardData(shopId),
     enabled: !!shopId,
-    staleTime: 1000 * 60 * 2, // 2 min - dashboard refreshes more often
+    staleTime: STALE.live,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * The backend generates the brief once per shop and date (LLM call) and serves
+ * the stored row after that, so refetching can't change it. Fetch once per session.
+ */
+export function useDailyBrief(shopId: string, briefDate?: string) {
+  return useQuery({
+    queryKey: qk.brief(shopId, briefDate),
+    queryFn: () => getDailyBrief(shopId, briefDate),
+    enabled: !!shopId,
+    staleTime: Infinity,
+    retry: false,
   });
 }

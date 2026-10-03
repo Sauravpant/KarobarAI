@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
   explainCreditRiskForCustomer,
@@ -9,157 +9,103 @@ import {
   getDemandGlobalImportance,
   getDemandModelInfo,
   getDemandStockSummary,
-  predictCreditRisk,
-  predictCreditRiskForCustomer,
-  predictCreditRiskProbability,
-  explainCreditRisk,
-  predictDemandNextDay,
-  predictDemandNext7Days,
-  explainDemandNextDay,
-  explainDemandNext7Days,
+  applySuggestedCreditLimit,
 } from '@/services/ml.service';
-import type {
-  CreditRiskFeatures,
-  DemandForecastRequest,
-  DemandGlobalImportance,
-  DemandForecastExplainDay,
-} from '@/types';
+import { qk, STALE } from '@/lib/queryKeys';
 
-// ── Per-customer credit risk ──────────────────────────────────────────────────
+// ── Credit risk (per customer; backend computes features from the DB) ─────────
 
 export function useCreditRiskExplain(shopId: string, customerId: string | null) {
   return useQuery({
-    queryKey: ['credit-risk', 'explain', shopId, customerId],
+    queryKey: qk.creditRiskExplain(shopId, customerId ?? ''),
     queryFn: () => explainCreditRiskForCustomer(shopId, customerId!),
     enabled: !!shopId && !!customerId,
-    retry: 1,
+    staleTime: STALE.normal,
   });
 }
 
-export function useCreditRiskPredict(shopId: string) {
+/** Sets customers.credit_limit to the server's suggestion (the only credit limit). */
+export function useApplyCreditLimit(shopId: string) {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ customerId, save = true }: { customerId: string; save?: boolean }) =>
-      predictCreditRiskForCustomer(shopId, customerId, save),
-    onSuccess: () => toast.success('Credit risk prediction saved'),
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Credit risk prediction failed');
+    mutationFn: (customerId: string) => applySuggestedCreditLimit(shopId, customerId),
+    meta: { errorMessage: 'Could not update the credit limit' },
+    onSuccess: async (r) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.creditRisk(shopId) }),
+        qc.invalidateQueries({ queryKey: qk.customers(shopId) }),
+        qc.invalidateQueries({ queryKey: qk.dashboard(shopId) }),
+      ]);
+      toast.success(
+        r.recommended_credit_limit === r.previous_credit_limit
+          ? 'Credit limit already matches the suggestion'
+          : `Credit limit set to Rs. ${r.recommended_credit_limit.toLocaleString('en-IN')}`
+      );
     },
-  });
-}
-
-// ── Generic credit risk ───────────────────────────────────────────────────────
-
-export function useGenericCreditPredict() {
-  return useMutation({
-    mutationFn: (features: CreditRiskFeatures) => predictCreditRisk(features),
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Prediction failed');
-    },
-  });
-}
-
-export function useGenericCreditProbability() {
-  return useMutation({
-    mutationFn: (features: CreditRiskFeatures) => predictCreditRiskProbability(features),
-  });
-}
-
-export function useGenericCreditExplain() {
-  return useMutation({
-    mutationFn: ({ features, topK = 5 }: { features: CreditRiskFeatures; topK?: number }) =>
-      explainCreditRisk(features, topK),
   });
 }
 
 export function useCreditRiskGlobalImportance(enabled = true) {
   return useQuery({
-    queryKey: ['credit-risk', 'global-importance'],
+    queryKey: qk.creditRiskGlobalImportance,
     queryFn: getCreditRiskGlobalImportance,
     enabled,
-    staleTime: 1000 * 60 * 30,
+    staleTime: STALE.slow,
   });
 }
 
 export function useCreditRiskModelInfo(enabled = true) {
   return useQuery({
-    queryKey: ['credit-risk', 'model-info'],
+    queryKey: qk.creditRiskModelInfo,
     queryFn: getCreditRiskModelInfo,
     enabled,
-    staleTime: 1000 * 60 * 30,
+    staleTime: STALE.slow,
   });
 }
 
-// ── Per-product demand ────────────────────────────────────────────────────────
+// ── Demand (per product; backend builds sales history and persists forecasts) ──
 
 export function useDemandForecast7Days(shopId: string, productId: string | null) {
   return useQuery({
-    queryKey: ['demand-forecast', shopId, productId, '7d'],
+    queryKey: qk.demand7Days(shopId, productId ?? ''),
     queryFn: () => getDemandForecastNext7Days(shopId, productId!),
     enabled: !!shopId && !!productId,
-    retry: 1,
+    staleTime: STALE.normal,
   });
 }
 
 export function useDemandForecastNextDay(shopId: string, productId: string | null) {
   return useQuery({
-    queryKey: ['demand-forecast', shopId, productId, '1d'],
+    queryKey: qk.demandNextDay(shopId, productId ?? ''),
     queryFn: () => getDemandForecastNextDay(shopId, productId!),
     enabled: !!shopId && !!productId,
-    retry: 1,
+    staleTime: STALE.normal,
   });
 }
 
 export function useDemandStockSummary(shopId: string, productId: string | null, lastDate?: string) {
   return useQuery({
-    queryKey: lastDate ? ['demand-stock-summary', shopId, productId, lastDate] : ['demand-stock-summary', shopId, productId],
+    queryKey: qk.demandStockSummary(shopId, productId ?? '', lastDate),
     queryFn: () => getDemandStockSummary(shopId, productId!, lastDate),
     enabled: !!shopId && !!productId,
-    retry: 1,
-  });
-}
-
-// ── Generic demand ────────────────────────────────────────────────────────────
-
-export function useGenericDemandNextDay() {
-  return useMutation({
-    mutationFn: (payload: DemandForecastRequest) => predictDemandNextDay(payload),
-  });
-}
-
-export function useGenericDemandNext7Days() {
-  return useMutation({
-    mutationFn: (payload: DemandForecastRequest) => predictDemandNext7Days(payload),
-  });
-}
-
-export function useGenericDemandExplainNextDay() {
-  return useMutation({
-    mutationFn: (payload: DemandForecastRequest) =>
-      explainDemandNextDay(payload) as Promise<DemandForecastExplainDay>,
-  });
-}
-
-export function useGenericDemandExplainNext7Days() {
-  return useMutation({
-    mutationFn: (payload: DemandForecastRequest) =>
-      explainDemandNext7Days(payload) as Promise<DemandForecastExplainDay[]>,
+    staleTime: STALE.live,
   });
 }
 
 export function useDemandModelInfo(enabled = true) {
   return useQuery({
-    queryKey: ['demand', 'model-info'],
+    queryKey: qk.demandModelInfo,
     queryFn: getDemandModelInfo,
     enabled,
-    staleTime: 1000 * 60 * 30,
+    staleTime: STALE.slow,
   });
 }
 
 export function useDemandGlobalImportance(enabled = true) {
-  return useQuery<DemandGlobalImportance>({
-    queryKey: ['demand', 'global-importance'],
-    queryFn: getDemandGlobalImportance as () => Promise<DemandGlobalImportance>,
+  return useQuery({
+    queryKey: qk.demandGlobalImportance,
+    queryFn: getDemandGlobalImportance,
     enabled,
-    staleTime: 1000 * 60 * 30,
+    staleTime: STALE.slow,
   });
 }
