@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.ml_manager import get_credit_risk_predictor
@@ -50,15 +50,13 @@ def _compute_features_from_db(db: Session, customer: Customer) -> Dict[str, Any]
 
     relationship_days = max(0, (now - customer.created_at).days)
 
+    is_credit = Transaction.payment_type == PaymentType.CREDIT
     recent_agg = db.query(
         func.count(Transaction.id).label("count"),
-        func.coalesce(func.sum(
-            func.cast(Transaction.payment_type != PaymentType.CREDIT, func.Float) * Transaction.total_amount
-        ), 0.0).label("cash_value"),
-        func.coalesce(func.sum(
-            func.cast(Transaction.payment_type == PaymentType.CREDIT, func.Float) * Transaction.total_amount
-        ), 0.0).label("credit_value"),
-        func.count(func.nullif(Transaction.payment_type != PaymentType.CREDIT, True)).label("credit_count"),
+        func.coalesce(func.sum(case((is_credit, 0), else_=Transaction.total_amount)), 0.0).label("cash_value"),
+        func.coalesce(func.sum(case((is_credit, Transaction.total_amount), else_=0)), 0.0).label("credit_value"),
+        # count() skips NULLs, and case() without else_ is NULL for non-credit rows
+        func.count(case((is_credit, 1))).label("credit_count"),
     ).filter(
         Transaction.customer_id == customer_id,
         Transaction.transaction_type == TransactionType.SALE,
@@ -73,9 +71,6 @@ def _compute_features_from_db(db: Session, customer: Customer) -> Dict[str, Any]
     all_agg = db.query(
         func.count(Transaction.id).label("total_count"),
         func.coalesce(func.avg(Transaction.total_amount), 0.0).label("avg_amount"),
-        func.coalesce(func.avg(
-            func.cast(Transaction.payment_type == PaymentType.CREDIT, func.Float) * Transaction.total_amount
-        ), 0.0).label("avg_credit_amount"),
         func.max(Transaction.created_at).label("last_purchase_at"),
     ).filter(
         Transaction.customer_id == customer_id,
@@ -106,7 +101,11 @@ def _compute_features_from_db(db: Session, customer: Customer) -> Dict[str, Any]
     )
 
     if all_agg.last_purchase_at:
-        days_since_last_purchase = max(0, (now - all_agg.last_purchase_at).days)
+        # transactions.created_at is timestamptz; compare in naive UTC like `now`
+        last = all_agg.last_purchase_at
+        if last.tzinfo is not None:
+            last = last.astimezone(timezone.utc).replace(tzinfo=None)
+        days_since_last_purchase = max(0, (now - last).days)
     else:
         days_since_last_purchase = relationship_days
 
@@ -172,6 +171,52 @@ def _compute_features_from_db(db: Session, customer: Customer) -> Dict[str, Any]
         "days_since_last_purchase": days_since_last_purchase,
     }
 
+# Suggested limit = recent monthly spend scaled by risk. It is computed from the
+# customer's behaviour, never from their current limit, so re-applying it gives
+# the same number instead of compounding.
+LIMIT_FACTOR = {RiskLevel.LOW: 1.0, RiskLevel.MEDIUM: 0.6, RiskLevel.HIGH: 0.3}
+MAX_CREDIT_LIMIT = 50_000.0  # ponytail: global ceiling in NPR; make it per-shop if owners need different caps
+LIMIT_ROUNDING = 100
+
+
+def _has_overdue(db: Session, customer_id: uuid.UUID) -> bool:
+    today = date.today()
+    return db.query(CreditSale.id).filter(
+        CreditSale.customer_id == customer_id,
+        CreditSale.status != CreditStatus.PAID,
+        (CreditSale.status == CreditStatus.OVERDUE) | (CreditSale.due_date < today),
+    ).first() is not None
+
+
+def suggest_credit_limit(
+    db: Session, customer: Customer, features: Dict[str, Any], risk_probability: float, is_risk: bool
+) -> Dict[str, Any]:
+    current = float(customer.credit_limit)
+    level = RiskLevel.HIGH if is_risk else _risk_level(risk_probability)
+    monthly_spend = features["cash_purchase_value_last_30d"] + features["credit_purchase_value_last_30d"]
+
+    if monthly_spend <= 0:
+        suggested, reason = current, "Not enough purchases in the last 30 days to suggest a change."
+    else:
+        target = monthly_spend * LIMIT_FACTOR[level]
+        suggested = min(MAX_CREDIT_LIMIT, round(target / LIMIT_ROUNDING) * LIMIT_ROUNDING)
+        reason = (
+            f"{int(LIMIT_FACTOR[level] * 100)}% of the last 30 days' spending "
+            f"(Rs. {monthly_spend:,.0f}) for a {level.value}-risk customer"
+        )
+        if suggested >= MAX_CREDIT_LIMIT:
+            reason += f", capped at Rs. {MAX_CREDIT_LIMIT:,.0f}"
+        if suggested > current and _has_overdue(db, customer.id):
+            suggested, reason = current, "Has overdue credit; the limit can't go up until it's paid."
+
+    return {
+        "current_credit_limit": current,
+        "recommended_credit_limit": float(suggested),
+        "limit_reason": reason,
+        "risk_level": level.value,
+    }
+
+
 def _risk_level(probability: float) -> RiskLevel:
     if probability >= 0.65:
         return RiskLevel.HIGH
@@ -234,25 +279,12 @@ def predict_for_customer(
             detail=f"Prediction error: {exc}",
         )
 
+    limit = suggest_credit_limit(db, customer, features, result["risk_probability"], result["is_risk"])
     if save_result:
-        risk_lvl = _risk_level(result["risk_probability"])
-        existing_limit = float(customer.credit_limit)
-        if result["is_risk"]:
-            recommended_limit = round(existing_limit * 0.5, 2)
-        else:
-            recommended_limit = round(existing_limit * 1.1, 2)
-
-        model_version = str(result.get("model", "unknown"))
-        record = CreditPrediction(
-            customer_id=customer_id,
-            risk_probability=result["risk_probability"],
-            risk_level=risk_lvl,
-            recommended_credit_limit=recommended_limit,
-            model_version=model_version,
-        )
-        db.add(record)
+        _record_prediction(db, customer_id, result, limit)
         db.commit()
 
+    result.update(limit)
     result["computed_features"] = features
     result["customer_id"] = str(customer_id)
     return result
@@ -276,9 +308,39 @@ def explain_for_customer(
             detail=f"Explanation error: {exc}",
         )
 
+    result.update(suggest_credit_limit(db, customer, features, result["risk_probability"], result["is_risk"]))
     result["computed_features"] = features
     result["customer_id"] = str(customer_id)
     return result
+
+
+def _record_prediction(db: Session, customer_id: uuid.UUID, result: Dict[str, Any], limit: Dict[str, Any]) -> None:
+    db.add(CreditPrediction(
+        customer_id=customer_id,
+        risk_probability=result["risk_probability"],
+        risk_level=RiskLevel(limit["risk_level"]),
+        recommended_credit_limit=limit["recommended_credit_limit"],
+        model_version=str(result.get("model", "unknown")),
+    ))
+
+
+def apply_suggested_limit(db: Session, shop_id: uuid.UUID, customer_id: uuid.UUID) -> Dict[str, Any]:
+    """Recompute the suggestion server-side and write it to customers.credit_limit."""
+    predictor = _get_predictor()
+    customer = _get_customer_or_404(db, shop_id, customer_id)
+    features = _compute_features_from_db(db, customer)
+    try:
+        result = predictor.predict(**features)
+    except Exception as exc:
+        logger.exception("Credit risk prediction for customer %s failed: %s", customer_id, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Prediction error: {exc}")
+
+    limit = suggest_credit_limit(db, customer, features, result["risk_probability"], result["is_risk"])
+    previous = float(customer.credit_limit)
+    customer.credit_limit = limit["recommended_credit_limit"]
+    _record_prediction(db, customer_id, result, limit)
+    db.commit()
+    return {**limit, "previous_credit_limit": previous, "customer_id": str(customer_id)}
 
 def get_global_feature_importance() -> Dict[str, Any]:
     predictor = _get_predictor()

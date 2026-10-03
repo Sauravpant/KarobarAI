@@ -76,6 +76,17 @@ def predict_for_customer(
     result = credit_risk_service.predict_for_customer(db, shop_id, customer_id, save_result=save)
     return ApiResponse(message="Customer credit risk prediction successful", data=result)
 
+@router_customer.post("/apply-limit", response_model=ApiResponse[dict])
+def apply_limit_for_customer(
+    shop_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = credit_risk_service.apply_suggested_limit(db, shop_id, customer_id)
+    return ApiResponse(message="Credit limit updated", data=result)
+
+
 @router_customer.post("/explain", response_model=ApiResponse[dict])
 def explain_for_customer(
     shop_id: uuid.UUID,

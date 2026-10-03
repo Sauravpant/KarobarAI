@@ -78,6 +78,29 @@ def create_transaction(
 
     total_amount = subtotal - payload.discount
 
+    credit_customer = None
+    if payload.transaction_type == TransactionType.SALE and payload.payment_type == PaymentType.CREDIT:
+        # Row lock so two simultaneous credit sales can't both slip under the limit
+        credit_customer = (
+            db.query(Customer)
+            .filter(Customer.id == payload.customer_id, Customer.shop_id == shop_id, Customer.is_active == True)
+            .with_for_update()
+            .first()
+        )
+        if not credit_customer:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found in this shop")
+        limit = float(credit_customer.credit_limit)
+        owed = float(credit_customer.current_outstanding_balance)
+        if owed + total_amount > limit:
+            available = max(0.0, limit - owed)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Credit limit exceeded: owes Rs. {owed:,.0f} of Rs. {limit:,.0f} limit; "
+                    f"available Rs. {available:,.0f}, this sale Rs. {total_amount:,.0f}"
+                ),
+            )
+
     transaction = Transaction(
         shop_id=shop_id,
         customer_id=payload.customer_id,
@@ -102,11 +125,10 @@ def create_transaction(
         )
         db.add(credit_sale)
 
-        customer = db.query(Customer).filter(Customer.id == payload.customer_id).first()
-        if customer:
-            customer.current_outstanding_balance = float(customer.current_outstanding_balance) + total_amount
-            if float(customer.current_outstanding_balance) > float(customer.max_outstanding_ever):
-                customer.max_outstanding_ever = customer.current_outstanding_balance
+        customer = credit_customer
+        customer.current_outstanding_balance = float(customer.current_outstanding_balance) + total_amount
+        if float(customer.current_outstanding_balance) > float(customer.max_outstanding_ever):
+            customer.max_outstanding_ever = customer.current_outstanding_balance
 
     db.commit()
     db.refresh(transaction)
