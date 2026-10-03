@@ -1,0 +1,13 @@
+.env
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+**/.ipynb_checkpoints
+**/catboost_info
+**/logs
+ml/*/data
+ml/*/notebooks
+Dockerfile
+.dockerignore
+*.md
