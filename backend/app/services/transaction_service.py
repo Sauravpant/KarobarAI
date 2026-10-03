@@ -15,7 +15,11 @@ from app.schemas.transaction import TransactionCreateRequest, CreditSaleUpdateRe
 from app.services.shop_service import get_shop_by_id
 
 def create_transaction(
-    db: Session, user: User, shop_id: uuid.UUID, payload: TransactionCreateRequest
+    db: Session,
+    user: User,
+    shop_id: uuid.UUID,
+    payload: TransactionCreateRequest,
+    created_at: datetime | None = None,
 ) -> Transaction:
     get_shop_by_id(db, user, shop_id)
 
@@ -112,6 +116,9 @@ def create_transaction(
         notes=payload.notes,
         items=tx_items,
     )
+    # Offline voice entries keep the time they were spoken; never let a client date a sale into the future.
+    if created_at:
+        transaction.created_at = min(created_at, datetime.now(timezone.utc))
     db.add(transaction)
     db.flush()
 

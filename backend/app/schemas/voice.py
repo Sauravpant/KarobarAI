@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 class VoiceAction(str, Enum):
     sale = "sale"
@@ -58,6 +58,7 @@ class VoiceConfirmRequest(BaseModel):
     due_date: Optional[str] = None
     notes: Optional[str] = None
     transactions: Optional[list[SingleTransactionConfirm]] = None
+    recorded_at: Optional[AwareDatetime] = None
 
 class VoiceProcessedItem(BaseModel):
     action: str

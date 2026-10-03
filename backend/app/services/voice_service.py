@@ -485,6 +485,7 @@ def confirm_voice_transactions(
                     notes=tx.notes or "Vyapar Voice sale",
                     items=tx_items,
                 ),
+                created_at=payload.recorded_at,
             )
 
             for line in tx.items:
@@ -527,6 +528,7 @@ def confirm_voice_transactions(
                     notes=tx.notes or "Vyapar Voice purchase",
                     items=tx_items,
                 ),
+                created_at=payload.recorded_at,
             )
 
             for line in tx.items:
