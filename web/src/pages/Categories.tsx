@@ -1,138 +1,124 @@
-import { useState } from 'react';
-import {
-  useCategories,
-  useCreateCategory,
-  useUpdateCategory,
-  useDeleteCategory,
-} from '@/hooks/useCategories';
+import { useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { Plus, Pencil, Trash2, Loader2, Tags } from 'lucide-react';
+import { useCategories, useCreateCategory, useUpdateCategory, useDeleteCategory } from '@/hooks/useCategories';
+import { useProducts } from '@/hooks/useInventory';
+import { useShopId } from '@/providers/AuthProvider';
 import { PageSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ErrorState, EmptyState } from '@/components/ui/StateComponents';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Plus, Pencil, Trash2, Loader2, Tags } from 'lucide-react';
-import type { Category, CreateCategoryPayload } from '@/types';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import type { Category } from '@/types';
+
+// Mirrors backend CategoryCreateRequest
+const categorySchema = z.object({
+  name: z.string().trim().min(1, 'Name is required'),
+  description: z.string().trim().optional(),
+});
+type CategoryForm = z.infer<typeof categorySchema>;
 
 export default function Categories() {
+  const shopId = useShopId();
   const { data: categories, isLoading, isError, refetch } = useCategories();
+  const { data: products } = useProducts(shopId);
   const createCategory = useCreateCategory();
   const updateCategory = useUpdateCategory();
   const deleteCategory = useDeleteCategory();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
-  const [form, setForm] = useState<CreateCategoryPayload>({ name: '', description: '' });
+  const [deleting, setDeleting] = useState<Category | null>(null);
 
-  const openCreate = () => {
-    setEditing(null);
-    setForm({ name: '', description: '' });
-    setDialogOpen(true);
-  };
+  const form = useForm<CategoryForm>({
+    resolver: zodResolver(categorySchema),
+    values: editing ? { name: editing.name, description: editing.description ?? '' } : { name: '', description: '' },
+  });
+  const pending = createCategory.isPending || updateCategory.isPending;
 
-  const openEdit = (c: Category) => {
+  // Products in this shop per category (categories themselves are global)
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of products ?? []) m.set(p.category_id, (m.get(p.category_id) ?? 0) + 1);
+    return m;
+  }, [products]);
+
+  const openDialog = (c: Category | null) => {
     setEditing(c);
-    setForm({ name: c.name, description: c.description ?? '' });
     setDialogOpen(true);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editing) {
-      await updateCategory.mutateAsync({
-        categoryId: editing.id,
-        payload: {
-          name: form.name,
-          description: form.description || undefined,
-        },
-      });
-    } else {
-      await createCategory.mutateAsync(form);
-    }
+  const onSubmit = form.handleSubmit(async ({ name, description }) => {
+    const payload = { name, description: description || undefined };
+    if (editing) await updateCategory.mutateAsync({ categoryId: editing.id, payload });
+    else await createCategory.mutateAsync(payload);
     setDialogOpen(false);
-  };
+  });
 
   if (isLoading) return <PageSkeleton />;
-  if (isError) return <ErrorState onRetry={refetch} />;
+  if (isError) return <ErrorState message="Could not load categories." onRetry={refetch} />;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto flex flex-col gap-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 text-red-600">
-              <Tags className="w-4 h-4" />
-            </span>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Categories</h1>
-          </div>
-          <p className="text-sm text-slate-500">
-            Manage product categories used across your inventory.
-          </p>
-        </div>
-        <Button size="sm" className="bg-[#E3182D] hover:bg-red-700 text-white shadow-sm transition-all duration-200" onClick={openCreate}>
-          <Plus className="w-4 h-4 mr-2" />
-          Add Category
-        </Button>
-      </div>
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto flex flex-col gap-6">
+      <PageHeader
+        title="Categories"
+        description="Product categories used across your inventory."
+        icon={Tags}
+        actions={
+          <Button onClick={() => openDialog(null)}>
+            <Plus /> Add category
+          </Button>
+        }
+      />
 
       {!categories?.length ? (
         <EmptyState
           title="No categories yet"
           description="Create categories before adding products."
           action={
-            <Button className="bg-[#E3182D] hover:bg-red-700 text-white shadow-sm transition-all duration-200" onClick={openCreate}>
-              Add Category
+            <Button size="sm" onClick={() => openDialog(null)}>
+              <Plus /> Add category
             </Button>
           }
         />
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-slate-50/70 border-b border-slate-200/60">
-                <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Name
-                </th>
-                <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Description
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">
-                  Actions
+        <div className="bg-surface rounded-xl border border-border shadow-sm overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <th className="text-left px-5 py-3">Name</th>
+                <th className="text-left px-5 py-3 hidden sm:table-cell">Description</th>
+                <th className="text-right px-5 py-3">Products</th>
+                <th className="px-5 py-3 text-right">
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {categories.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50/50 transition-colors duration-150 group">
-                  <td className="px-6 py-4.5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-md bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-red-50 group-hover:text-red-500 transition-colors duration-200">
-                        <Tags className="w-4 h-4" />
-                      </div>
-                      <span className="text-sm font-semibold text-slate-800 tracking-tight">{c.name}</span>
-                    </div>
+                <tr key={c.id} className="hover:bg-slate-50/60 transition-colors">
+                  <td className="px-5 py-3 font-semibold text-slate-800">{c.name}</td>
+                  <td className="px-5 py-3 text-slate-500 max-w-md truncate hidden sm:table-cell" title={c.description ?? undefined}>
+                    {c.description || <span className="text-slate-300">—</span>}
                   </td>
-                  <td className="px-6 py-4.5 text-sm text-slate-500 max-w-md truncate">
-                    {c.description || <span className="text-slate-300">No description provided</span>}
-                  </td>
-                  <td className="px-6 py-4.5 text-right space-x-1.5">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100 hover:text-slate-800 text-slate-400" onClick={() => openEdit(c)}>
-                      <Pencil className="w-3.5 h-3.5" />
+                  <td className="px-5 py-3 text-right tabular text-slate-600">{counts.get(c.id) ?? 0}</td>
+                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                    <Button variant="ghost" size="icon-sm" aria-label={`Edit ${c.name}`} onClick={() => openDialog(c)}>
+                      <Pencil className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                      disabled={deleteCategory.isPending}
-                      onClick={() => deleteCategory.mutate(c.id)}
+                      size="icon-sm"
+                      className="text-danger hover:bg-danger-soft hover:text-danger"
+                      aria-label={`Delete ${c.name}`}
+                      onClick={() => setDeleting(c)}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="size-3.5" />
                     </Button>
                   </td>
                 </tr>
@@ -143,52 +129,48 @@ export default function Categories() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold text-slate-900">
-              {editing ? 'Edit Category' : 'Add Category'}
-            </DialogTitle>
+            <DialogTitle>{editing ? 'Edit category' : 'Add category'}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-5 pt-2">
-            <div className="space-y-2">
-              <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Name</Label>
-              <Input
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="focus-visible:ring-red-500/20 focus-visible:border-[#E3182D]"
-              />
+          <form onSubmit={onSubmit} className="space-y-4" noValidate>
+            <div className="space-y-1.5">
+              <Label htmlFor="cat-name">Name</Label>
+              <Input id="cat-name" aria-invalid={!!form.formState.errors.name} {...form.register('name')} />
+              {form.formState.errors.name && <p className="text-xs text-danger">{form.formState.errors.name.message}</p>}
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Description</Label>
-              <Input
-                value={form.description ?? ''}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                className="focus-visible:ring-red-500/20 focus-visible:border-[#E3182D]"
-              />
+            <div className="space-y-1.5">
+              <Label htmlFor="cat-desc">Description</Label>
+              <Input id="cat-desc" placeholder="Optional" {...form.register('description')} />
             </div>
-            <DialogFooter className="gap-2 pt-2">
-              <Button type="button" variant="outline" className="border-slate-200" onClick={() => setDialogOpen(false)}>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="bg-[#E3182D] hover:bg-red-700 text-white min-w-[80px]"
-                disabled={createCategory.isPending || updateCategory.isPending}
-              >
-                {createCategory.isPending || updateCategory.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                ) : editing ? (
-                  'Save'
-                ) : (
-                  'Create'
-                )}
+              <Button type="submit" disabled={pending}>
+                {pending && <Loader2 className="animate-spin" />}
+                {editing ? 'Save' : 'Create'}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete ${deleting?.name ?? 'category'}?`}
+        description={
+          deleting && counts.get(deleting.id)
+            ? `${counts.get(deleting.id)} product(s) in this shop use this category. The backend may refuse the delete.`
+            : 'This category will be removed.'
+        }
+        pending={deleteCategory.isPending}
+        onConfirm={() => {
+          if (deleting) deleteCategory.mutate(deleting.id);
+          setDeleting(null);
+        }}
+      />
     </div>
   );
 }
-

@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
-import { useAuth } from "@/provider/AuthProvider";
+import { useShopId } from "@/providers/AuthProvider";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { errorMessage } from "@/lib/queryClient";
+import { formatDate } from "@/utils/format";
 import { useProducts } from "@/hooks/useInventory";
 import {
   useDemandForecast7Days,
@@ -8,7 +11,11 @@ import {
   useDemandGlobalImportance,
   useDemandStockSummary,
 } from "@/hooks/useML";
-import { PageSkeleton } from "@/components/ui/LoadingSkeleton";
+import { PageSkeleton, BlockSkeleton } from "@/components/ui/LoadingSkeleton";
+import { InfluenceDonut } from "@/components/charts/InfluenceDonut";
+import { DriverBars } from "@/components/charts/DriverBars";
+import { DEMAND_GROUPS, GROUP_COLORS, demandFeature, groupTotals } from "@/lib/shapGroups";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState, EmptyState } from "@/components/ui/StateComponents";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
@@ -23,47 +30,42 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  Cell,
+  ReferenceLine,
 } from "recharts";
 import {
   TrendingUp,
-  Sparkles,
   AlertTriangle,
   Package,
-  Loader2,
   ChevronDown,
   ChevronUp,
-  BarChart3,
   Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DemandGlobalImportanceEntry } from "@/types";
 
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (active && payload?.length) {
-    return (
-      <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3">
-        <p className="text-xs font-semibold text-slate-600">{label}</p>
-        <p className="text-xs text-red-600">
-          Predicted: {Number(payload[0].value).toFixed(1)} units
-        </p>
-        {payload[1] && (
-          <p className="text-xs text-slate-500">
-            Confidence: {Number(payload[1].value)}%
-          </p>
-        )}
-      </div>
-    );
-  }
-  return null;
+type TooltipProps = {
+  active?: boolean;
+  label?: string;
+  payload?: { value: number; payload: { confidence: number } }[];
+};
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3">
+      <p className="text-xs font-semibold text-slate-600">{label}</p>
+      <p className="text-xs text-brand">Predicted: {Number(payload[0].value).toFixed(1)} units</p>
+      <p className="text-xs text-slate-500">Confidence: {payload[0].payload.confidence}%</p>
+    </div>
+  );
 };
 
 export default function DemandForecast() {
-  const { activeShop } = useAuth();
-  const shopId = activeShop?.id ?? "";
+  const shopId = useShopId();
   const { data: products, isLoading, isError, refetch } = useProducts(shopId);
   const [productId, setProductId] = useState<string | null>(null);
-  const [showExplain, setShowExplain] = useState(false);
-  const [showGlobal, setShowGlobal] = useState(false);
+  const [showConfidence, setShowConfidence] = useState(false);
 
   const selectedId = productId ?? products?.[0]?.id ?? null;
   const selected = products?.find((p) => p.id === selectedId) ?? null;
@@ -80,18 +82,24 @@ export default function DemandForecast() {
   const { data: stockSummary } = useDemandStockSummary(shopId, selectedId);
   const { data: modelInfo } = useDemandModelInfo(!!shopId);
   const { data: globalImportance, isLoading: globalLoading } =
-    useDemandGlobalImportance(!!shopId && showGlobal);
+    useDemandGlobalImportance(!!shopId);
 
   const chartData = useMemo(() => {
-    return (forecast ?? []).map((d) => ({
-      date: new Date(d.forecast_date).toLocaleDateString("en-IN", {
-        weekday: "short",
-        day: "numeric",
-      }),
-      units: Math.round(d.predicted_units * 10) / 10,
-      confidence: Math.round(d.confidence * 100),
-    }));
+    const rows = [];
+    let running = 0;
+    for (const d of forecast ?? []) {
+      running += d.predicted_units;
+      rows.push({
+        date: new Date(d.forecast_date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }),
+        units: Math.round(d.predicted_units * 10) / 10,
+        cumulative: Math.round(running * 10) / 10,
+        confidence: Math.round(d.confidence * 100),
+      });
+    }
+    return rows;
   }, [forecast]);
+  const currentStock = stockSummary?.current_stock ?? selected?.stock_quantity ?? 0;
+  const runsOutOn = chartData.find((d) => d.cumulative > currentStock)?.date;
 
   const peakDay = useMemo(() => {
     if (!chartData.length) return null;
@@ -99,10 +107,6 @@ export default function DemandForecast() {
   }, [chartData]);
 
   const totalPredicted = chartData.reduce((s, d) => s + d.units, 0);
-
-  // Derive the best explain data from the 7-day forecast itself (confidence/model embedded)
-  // The /explain endpoints require the same history payload the per-product backend constructs
-  // We surface them from the forecast array directly (confidence is included)
 
   if (!shopId || isLoading) return <PageSkeleton />;
   if (isError) return <ErrorState onRetry={refetch} />;
@@ -118,57 +122,53 @@ export default function DemandForecast() {
     );
   }
 
-  const modelName = String(
-    (modelInfo as any)?.model ??
-      (modelInfo as any)?.metadata?.model ??
-      (modelInfo as any)?.metadata?.model_name ??
-      "CatBoost",
-  );
+  const modelName = String(modelInfo?.best_model ?? modelInfo?.model ?? "demand model");
 
   // Global importance entries from the backend
-  const globalEntries: DemandGlobalImportanceEntry[] =
-    globalImportance ?
-      (
-        globalImportance.shap_importance ??
-        globalImportance.native_importance ??
-        []
-      ).slice(0, 12)
-    : [];
-  const globalMax = globalEntries.reduce(
-    (m, e) => Math.max(m, Math.abs(e.importance)),
-    0,
+  // SHAP rows carry mean_abs_shap (units), native rows carry importance
+  const globalValues = Object.fromEntries(
+    (globalImportance?.shap_importance ?? globalImportance?.native_importance ?? []).map((e: DemandGlobalImportanceEntry) => [
+      e.feature,
+      e.mean_abs_shap ?? e.importance ?? 0,
+    ]),
   );
+  const groupShare = groupTotals(globalValues, DEMAND_GROUPS, demandFeature);
+  const driverData = Object.entries(globalValues)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([f, value]) => {
+      const meta = demandFeature(f);
+      return {
+        label: meta.label,
+        group: meta.group,
+        value,
+        color: GROUP_COLORS[DEMAND_GROUPS.indexOf(meta.group as (typeof DEMAND_GROUPS)[number])] ?? GROUP_COLORS[0],
+      };
+    });
 
   return (
-    <div className="p-6 space-y-6">
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Demand Forecasting
-          </h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            AI predictions based on your product sales history — powered by{" "}
-            {modelName}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <select
-            className="h-10 rounded-md border border-slate-200 px-3 text-sm bg-white min-w-55"
-            value={selectedId ?? ""}
-            onChange={(e) => setProductId(e.target.value)}>
-            {(products ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.product_name}
-              </option>
-            ))}
-          </select>
-          <Badge className="bg-red-50 text-red-700 border-red-200 border px-3 py-1 h-auto">
-            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-            AI Powered
-          </Badge>
-        </div>
-      </div>
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+      <PageHeader
+        title="Demand Forecast"
+        description={`Per-product predictions from your sales history (${modelName}).`}
+        icon={TrendingUp}
+        actions={
+          <>
+            <label htmlFor="df-product" className="sr-only">Product</label>
+            <select
+              id="df-product"
+              className="h-9 rounded-lg border border-input px-3 text-sm bg-white w-full sm:w-60"
+              value={selectedId ?? ""}
+              onChange={(e) => setProductId(e.target.value)}>
+              {(products ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.product_name}
+                </option>
+              ))}
+            </select>
+          </>
+        }
+      />
 
       {/* ── Stock vs demand summary card ── */}
       <div className="rounded-2xl border border-slate-200/80 bg-linear-to-br from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-sm">
@@ -181,13 +181,13 @@ export default function DemandForecast() {
               {selected?.product_name ?? "Selected product"}
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              {stockSummary?.summary ?? "Comparing current inventory with AI demand projections for the next day and next 7 days."}
+              {stockSummary?.summary ?? "Current stock compared with forecast demand for tomorrow and the next 7 days."}
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-sm">
             <p className="text-[11px] uppercase tracking-[0.24em] text-slate-300">Status</p>
             <p className="mt-1 text-lg font-semibold text-white">
-              {stockSummary?.status === "restock" ? "Restock recommended" : "Healthy stock"}
+              {!stockSummary ? "—" : stockSummary.status === "restock" ? "Restock recommended" : "Healthy stock"}
             </p>
           </div>
         </div>
@@ -208,12 +208,16 @@ export default function DemandForecast() {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-3">
-          <div className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-semibold text-emerald-200">
-            {stockSummary?.recommended_restock ? `Restock ${stockSummary.recommended_restock} units` : "No urgent restock needed"}
-          </div>
-          <div className="rounded-full bg-red-500/20 px-3 py-1 text-sm font-semibold text-red-200">
-            {stockSummary?.stock_gap_for_next_7_days ? `Gap ${stockSummary.stock_gap_for_next_7_days} units` : "Covered for 7 days"}
-          </div>
+          {stockSummary && (
+            <>
+              <div className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-semibold text-emerald-200">
+                {stockSummary.recommended_restock ? `Restock ${stockSummary.recommended_restock} units` : "No urgent restock needed"}
+              </div>
+              <div className="rounded-full bg-red-500/20 px-3 py-1 text-sm font-semibold text-red-200">
+                {stockSummary.stock_gap_for_next_7_days ? `Short by ${stockSummary.stock_gap_for_next_7_days} units over 7 days` : "Covered for 7 days"}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -221,16 +225,16 @@ export default function DemandForecast() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
           title="Product"
-          value={selected?.product_name?.slice(0, 18) ?? "—"}
+          value={selected?.product_name ?? "—"}
           subtitle={`Stock: ${selected?.stock_quantity ?? 0}`}
           icon={Package}
           iconBg="bg-red-50/80"
-          iconColor="text-[#E3182D]"
+          iconColor="text-brand"
         />
         <StatCard
           title="Tomorrow"
           value={nextDay ? nextDay.predicted_units.toFixed(1) : "—"}
-          subtitle={nextDay?.forecast_date ?? "Loading..."}
+          subtitle={nextDay ? formatDate(nextDay.forecast_date) : "—"}
           icon={TrendingUp}
           iconBg="bg-emerald-50"
           iconColor="text-emerald-600"
@@ -253,21 +257,23 @@ export default function DemandForecast() {
         />
       </div>
       {forecastLoading ?
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-16 flex flex-col items-center gap-3">
-          <Loader2 className="w-8 h-8 animate-spin text-[#E3182D]" />
-          <p className="text-sm text-slate-500">Generating 7-day forecast...</p>
+        <div className="space-y-6" aria-busy="true" aria-label="Generating forecast">
+          <Skeleton className="h-80 rounded-xl" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Skeleton className="h-64 rounded-xl" />
+            <BlockSkeleton rows={7} className="bg-white rounded-xl border border-border p-6" />
+          </div>
         </div>
       : forecastError ?
         <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-12 text-center space-y-3">
           <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto" />
           <p className="font-semibold text-slate-800">Forecast unavailable</p>
           <p className="text-sm text-slate-500 max-w-md mx-auto">
-            {(forecastErr as any)?.response?.data?.message ||
-              "Need enough sales history (≥21 days) or a loaded demand model on the backend."}
+            {errorMessage(forecastErr, "The demand model needs more sales history for this product.")}
           </p>
           <Button
             onClick={() => refetchForecast()}
-            className="bg-[#E3182D] hover:bg-red-700 text-white">
+            >
             Retry
           </Button>
         </div>
@@ -278,8 +284,8 @@ export default function DemandForecast() {
               <h2 className="text-base font-bold text-slate-900 tracking-tight">
                 Next 7 Days — {selected?.product_name}
               </h2>
-              <p className="text-xs text-slate-400">
-                Predicted units sold per day · Model: {modelName}
+              <p className="text-xs text-slate-500">
+                Predicted units sold per day. Hollow points: model confidence below 60%.
               </p>
             </div>
             <ResponsiveContainer width="100%" height={260}>
@@ -309,7 +315,20 @@ export default function DemandForecast() {
                   stroke="#E3182D"
                   strokeWidth={2.5}
                   fill="url(#colorDemand)"
-                  dot={{ fill: "#E3182D", r: 3 }}
+                  dot={(props: { cx?: number; cy?: number; index?: number }) => {
+                    const low = (chartData[props.index ?? 0]?.confidence ?? 100) < 60;
+                    return (
+                      <circle
+                        key={props.index}
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={low ? 4 : 3}
+                        fill={low ? "#fff" : "#E3182D"}
+                        stroke="#E3182D"
+                        strokeWidth={low ? 2 : 0}
+                      />
+                    );
+                  }}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -317,21 +336,34 @@ export default function DemandForecast() {
 
           {/* ── Daily breakdown + SHAP explanation from forecast ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Bar chart */}
-            <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6 transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
-              <h2 className="text-base font-bold text-slate-900 mb-4 tracking-tight">
-                Daily Breakdown
-              </h2>
+            {/* Cumulative demand against what's on the shelf */}
+            <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6">
+              <h2 className="text-base font-bold text-slate-900 tracking-tight">Cumulative demand vs stock</h2>
+              <p className="text-xs text-slate-500 mb-4">
+                {runsOutOn
+                  ? `At this rate current stock (${currentStock}) runs out around ${runsOutOn}.`
+                  : `Current stock (${currentStock}) covers the forecast week.`}
+              </p>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    formatter={(value: unknown) => [`${Number(value)} units`, "Cumulative demand"]}
+                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   />
-                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="units" fill="#E3182D" radius={[4, 4, 0, 0]} />
+                  <ReferenceLine
+                    y={currentStock}
+                    stroke="#d97706"
+                    strokeDasharray="4 4"
+                    label={{ value: "Stock", position: "insideTopRight", fontSize: 11, fill: "#d97706" }}
+                  />
+                  <Bar dataKey="cumulative" radius={[4, 4, 0, 0]}>
+                    {chartData.map((d) => (
+                      <Cell key={d.date} fill={d.cumulative > currentStock ? "#E3182D" : "#fca5a5"} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -347,7 +379,7 @@ export default function DemandForecast() {
                     <div
                       key={d.date}
                       className="flex items-center justify-between py-2.5">
-                      <span className="text-sm font-semibold text-slate-655">
+                      <span className="text-sm font-semibold text-slate-600">
                         {d.date}
                       </span>
                       <div className="flex items-center gap-3">
@@ -369,7 +401,7 @@ export default function DemandForecast() {
                 </div>
               </div>
               {selected && totalPredicted > selected.stock_quantity && (
-                <div className="mt-4 p-3 bg-amber-55/40 border border-amber-200/60 rounded-xl text-xs font-semibold text-amber-800 flex gap-2">
+                <div className="mt-4 p-3 bg-amber-50 border border-amber-200/60 rounded-xl text-xs font-semibold text-amber-800 flex gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
                   <span>
                     Predicted 7-day demand ({totalPredicted.toFixed(0)}) exceeds
@@ -381,198 +413,68 @@ export default function DemandForecast() {
             </div>
           </div>
 
-          {/* ── SHAP Explanation Panel (from /explain-next-7-days via per-product backend) ── */}
-          <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
+          {/* ── Forecast confidence (from the forecast rows) ──
+              Per-product SHAP explanations aren't exposed by the backend; the
+              /ml/demand/explain-* routes need hand-built 21-day histories. */}
+          <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden">
             <button
-              onClick={() => setShowExplain((v) => !v)}
+              onClick={() => setShowConfidence((v) => !v)}
+              aria-expanded={showConfidence}
               className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#E3182D]" />
-                <span className="font-bold text-sm text-slate-900">
-                  AI Explanation — What Drives This Forecast?
-                </span>
-                <Badge className="bg-red-50 text-[#E3182D] border-red-200 border text-[10px] h-auto px-2">
-                  SHAP
-                </Badge>
-              </div>
-              {showExplain ?
+              <span className="flex items-center gap-2 font-bold text-sm text-slate-900">
+                <Info className="w-4 h-4 text-brand" /> Model confidence per day
+              </span>
+              {showConfidence ?
                 <ChevronUp className="w-4 h-4 text-slate-400" />
               : <ChevronDown className="w-4 h-4 text-slate-400" />}
             </button>
-
-            {showExplain && (
+            {showConfidence && (
               <div className="px-6 pb-6 border-t border-slate-100">
-                <p className="text-xs text-slate-500 mt-4 mb-5">
-                  The confidence score in each forecast day reflects how
-                  strongly the model signals demand. Factors like lag sales,
-                  rolling averages, festival proximity, is_staple and
-                  is_perishable flags, and location type drive each prediction.
-                  The chart below shows the raw model confidence per day.
+                <p className="text-xs text-slate-500 mt-4 mb-4">
+                  Confidence returned by the model for each forecast day. Lower values mean a wider likely range.
                 </p>
-
-                {/* Confidence trend */}
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-                  Model Confidence Per Day
-                </h3>
-                <ResponsiveContainer width="100%" height={150}>
+                <ResponsiveContainer width="100%" height={160}>
                   <BarChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10, fill: "#94a3b8" }}
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fontSize: 10, fill: "#94a3b8" }}
-                    />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#94a3b8" }} />
+                    <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 10, fill: "#94a3b8" }} />
                     <Tooltip
-                      formatter={(value: any) => [
-                        `${Array.isArray(value) ? value[0] : value}%`,
-                        "Confidence",
-                      ]}
+                      formatter={(value: unknown) => [`${Number(value)}%`, "Confidence"]}
                       contentStyle={{ fontSize: 12, borderRadius: 8 }}
                     />
-                    <Bar
-                      dataKey="confidence"
-                      fill="#10b981"
-                      radius={[4, 4, 0, 0]}
-                    />
+                    <Bar dataKey="confidence" fill="#10b981" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
-
-                {/* Key demand drivers info */}
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-red-50/40 rounded-xl p-4 border border-red-100/50">
-                    <h4 className="text-xs font-bold text-red-750 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                      <TrendingUp className="w-3.5 h-3.5" /> Demand Boosters
-                    </h4>
-                    <ul className="space-y-2 text-xs text-slate-650 font-medium">
-                      {selected?.is_staple && (
-                        <li className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-                          Staple product — steady baseline demand
-                        </li>
-                      )}
-                      {selected?.is_perishable && (
-                        <li className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                          Perishable — frequent restock pattern
-                        </li>
-                      )}
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-                        Recent lag sales (lag_1, lag_7, lag_14)
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-                        Rolling 7-day average — recent trend signal
-                      </li>
-                    </ul>
-                  </div>
-                  <div className="bg-slate-50/50 rounded-xl p-4 border border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                      <Info className="w-3.5 h-3.5" /> Model Context
-                    </h4>
-                    <ul className="space-y-2 text-xs text-slate-655 font-medium">
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                        Location: {activeShop?.location_type ?? "—"}
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                        Model: {modelName}
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-                        Day-of-week &amp; rolling 21-day avg
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-                        Festival proximity features
-                      </li>
-                    </ul>
-                  </div>
-                </div>
               </div>
             )}
           </div>
 
-          {/* ── Global Feature Importance ── */}
-          <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
-            <button
-              onClick={() => setShowGlobal((v) => !v)}
-              className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors">
-              <div className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-[#E3182D]" />
-                <span className="font-bold text-sm text-slate-900">
-                  Global Feature Importance
-                </span>
-                <Badge className="bg-red-50 text-[#E3182D] border-red-200 border text-[10px] h-auto px-2">
-                  SHAP / Native
-                </Badge>
-              </div>
-              {showGlobal ?
-                <ChevronUp className="w-4 h-4 text-slate-400" />
-              : <ChevronDown className="w-4 h-4 text-slate-400" />}
-            </button>
-
-            {showGlobal && (
-              <div className="px-6 pb-6 border-t border-slate-100">
-                {globalLoading ?
-                  <div className="flex items-center justify-center py-10 gap-3">
-                    <Loader2 className="w-5 h-5 animate-spin text-[#E3182D]" />
-                    <span className="text-sm text-slate-500">
-                      Loading feature importance...
-                    </span>
-                  </div>
-                : globalEntries.length === 0 ?
-                  <p className="text-sm text-slate-500 py-8 text-center">
-                    No global importance data available from the model.
-                  </p>
-                : <>
-                    <p className="text-xs text-slate-500 mt-4 mb-5">
-                      Ranked by mean absolute SHAP value (or native importance)
-                      across training data. Higher values = stronger influence
-                      on demand predictions.
-                    </p>
-                    <div className="space-y-4">
-                      {globalEntries.map((e, i) => (
-                        <div
-                          key={e.feature}
-                          className="flex items-center gap-3">
-                          <span className="text-xs font-bold text-slate-400 w-5 shrink-0">
-                            #{i + 1}
-                          </span>
-                          <div className="flex-1">
-                            <div className="flex justify-between text-xs font-semibold mb-1.5">
-                              <span className="text-slate-700 truncate pr-4">
-                                {e.feature
-                                  .replace(/_/g, " ")
-                                  .replace(/\b\w/g, (c) => c.toUpperCase())}
-                              </span>
-                              <span className="text-[#E3182D] shrink-0">
-                                {e.importance.toFixed(4)}
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                              <div
-                                className="bg-[#E3182D] h-full rounded-full transition-all"
-                                style={{
-                                  width: `${globalMax > 0 ? Math.min(100, (Math.abs(e.importance) / globalMax) * 100) : 0}%`,
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                }
-              </div>
-            )}
-          </div>
         </>
       }
+
+      {/* ── What drives demand (model-wide SHAP, grouped into factors) ──
+          The backend has no per-product explanation route, so this is the model's
+          average influence across all products and shops. */}
+      <section className="bg-white rounded-xl border border-border shadow-sm p-6">
+        <h2 className="text-base font-bold text-slate-900 tracking-tight">What drives demand</h2>
+        <p className="text-xs text-muted-foreground mt-1 mb-5">
+          How much each factor moves the forecast on average, across all products and shops.
+        </p>
+        {globalLoading ? (
+          <BlockSkeleton rows={6} />
+        ) : !driverData.length ? (
+          <p className="text-sm text-slate-500 py-8 text-center">No model data available.</p>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div>
+              <InfluenceDonut data={groupShare} label="Share of influence on demand" />
+            </div>
+            <div>
+              <DriverBars data={driverData} valueLabel="Avg. units moved per day" format={(v) => `±${v.toFixed(1)}`} />
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

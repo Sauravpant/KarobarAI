@@ -1,5 +1,7 @@
-import { useMemo, useState, useEffect, useRef, useDeferredValue } from "react";
-import { useAuth } from "@/provider/AuthProvider";
+import { useMemo, useState, useEffect, useRef } from "react";
+import { useShopId } from "@/providers/AuthProvider";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { PageHeader } from "@/components/ui/PageHeader";
 import {
   useInfiniteTransactions,
   useTransactionStats,
@@ -13,7 +15,6 @@ import { useProducts } from "@/hooks/useInventory";
 import { PageSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ErrorState, EmptyState } from "@/components/ui/StateComponents";
 import { StatCard } from "@/components/ui/StatCard";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,78 +39,27 @@ import {
   Clock,
   Search,
   Plus,
-  Banknote,
-  Smartphone,
   Receipt,
   Loader2,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatCurrency } from "@/utils/format";
+import { CreditStatusBadge, PaymentBadge } from "@/components/ui/StatusBadge";
+import { RelativeTime } from "@/components/ui/RelativeTime";
+import { formatCurrency, formatDate, formatDateTime } from "@/utils/format";
 import type {
   CreateTransactionPayload,
   CreditStatus,
   PaymentType,
   Transaction,
+  TransactionType,
 } from "@/types";
 
-const KATHMANDU_TIME_ZONE = "Asia/Kathmandu";
-
-
-function formatKathmanduDateTime(value: string) {
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: KATHMANDU_TIME_ZONE,
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function MethodIcon({ method }: { method: PaymentType }) {
-  if (method === "cash")
-    return <Banknote className="w-4 h-4 text-emerald-500" />;
-  if (method === "qr") return <Smartphone className="w-4 h-4 text-blue-500" />;
-  return <CreditCard className="w-4 h-4 text-red-500" />;
-}
-
 function paymentLabel(type: PaymentType) {
-  if (type === "cash") return "Cash";
-  if (type === "qr") return "QR";
-  return "Credit";
+  return type === "cash" ? "Cash" : type === "qr" ? "QR" : "Credit";
 }
 
-function StatusBadge({ tx }: { tx: Transaction }) {
-  const status = tx.credit_sale?.status ?? "completed";
-  const label =
-    status === "paid" ? "Paid"
-    : status === "overdue" ? "Overdue"
-    : status === "unpaid" ? "Unpaid"
-    : "Completed";
-  return (
-    <Badge
-      className={cn("text-xs font-semibold border-0 capitalize", {
-        "bg-emerald-100 text-emerald-700":
-          status === "completed" || status === "paid",
-        "bg-amber-100 text-amber-700": status === "unpaid",
-        "bg-red-100 text-red-700": status === "overdue",
-      })}>
-      {label}
-    </Badge>
-  );
-}
-
-function TransactionTypeBadge({ tx }: { tx: Transaction }) {
-  return (
-    <Badge
-      className={cn("text-[10px] font-semibold border-0 capitalize", {
-        "bg-sky-100 text-sky-700": tx.transaction_type === "sale",
-        "bg-violet-100 text-violet-700": tx.transaction_type === "purchase",
-      })}>
-      {tx.transaction_type}
-    </Badge>
-  );
-}
+const txStatus = (tx: Transaction) => tx.credit_sale?.status ?? "completed";
 
 type CartLine = {
   product_id: string;
@@ -119,11 +69,10 @@ type CartLine = {
 };
 
 export default function Transactions() {
-  const { activeShop } = useAuth();
-  const shopId = activeShop?.id ?? "";
+  const shopId = useShopId();
 
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const deferredSearch = useDebouncedValue(search, 350);
   const [activeTab, setActiveTab] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saleOpen, setSaleOpen] = useState(false);
@@ -175,6 +124,7 @@ export default function Transactions() {
     return () => observer.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+  const [txType, setTxType] = useState<TransactionType>("sale");
   const [paymentType, setPaymentType] = useState<PaymentType>("cash");
   const [customerId, setCustomerId] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -211,24 +161,32 @@ export default function Transactions() {
         count: statsData.total_count,
       };
     }
-    const pageStats = infiniteData?.pages[0]?.stats;
-    if (pageStats) {
-      return {
-        todaySales: pageStats.today_sales,
-        totalSales: pageStats.total_sales,
-        creditSales: pageStats.credit_sales,
-        pending: pageStats.pending_credit,
-        count: pageStats.total_count,
-      };
-    }
-    return { todaySales: 0, totalSales: 0, creditSales: 0, pending: 0, count: 0 };
-  }, [statsData, infiniteData]);
+    return null;
+  }, [statsData]);
 
   const filtered = transactions;
 
   const selected = detailTx ?? transactions.find((t) => t.id === selectedId);
-  const cartTotal =
-    cart.reduce((s, l) => s + l.price * l.quantity, 0) - discount;
+  const cartSubtotal = cart.reduce((s, l) => s + l.price * l.quantity, 0);
+  const cartTotal = cartSubtotal - discount;
+  const stockOf = (productId: string) => products?.find((p) => p.id === productId)?.stock_quantity ?? 0;
+  // Sales can't exceed stock (backend rejects it); purchases add stock so any quantity is fine
+  // Same rule the backend enforces: credit only while owed + this sale <= credit_limit
+  const creditCustomer =
+    txType === "sale" && paymentType === "credit" ? customers?.find((c) => c.id === customerId) : undefined;
+  const availableCredit = creditCustomer
+    ? Math.max(0, creditCustomer.credit_limit - creditCustomer.current_outstanding_balance)
+    : null;
+  const cartError =
+    txType === "sale"
+      ? cart.find((l) => l.quantity > stockOf(l.product_id))
+        ? "A quantity is more than what's in stock."
+        : discount > cartSubtotal
+          ? "Discount is larger than the subtotal."
+          : availableCredit !== null && cartTotal > availableCredit
+            ? `Over the credit limit: ${creditCustomer?.full_name} can take ${formatCurrency(availableCredit)} more on credit.`
+            : null
+      : null;
 
   const addProductToCart = () => {
     const product = products?.find((p) => p.id === productPick);
@@ -246,7 +204,8 @@ export default function Transactions() {
           product_id: product.id,
           quantity: 1,
           name: product.product_name,
-          price: product.selling_price,
+          // Backend prices sale items at selling_price; purchases at cost_price
+          price: txType === "sale" ? product.selling_price : product.cost_price,
         },
       ];
     });
@@ -254,6 +213,7 @@ export default function Transactions() {
   };
 
   const resetSaleForm = () => {
+    setTxType("sale");
     setPaymentType("cash");
     setCustomerId("");
     setDueDate("");
@@ -265,8 +225,9 @@ export default function Transactions() {
 
   const submitSale = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (cart.length === 0) return;
+    if (cart.length === 0 || cartError) return;
     const payload: CreateTransactionPayload = {
+      transaction_type: txType,
       payment_type: paymentType,
       discount: discount || undefined,
       notes: notes || undefined,
@@ -283,32 +244,22 @@ export default function Transactions() {
   };
 
   if (!shopId || isLoading) return <PageSkeleton />;
-  if (isError) return <ErrorState onRetry={refetch} />;
+  if (isError) return <ErrorState message="Could not load transactions." onRetry={refetch} />;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto flex flex-col gap-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 text-[#E3182D]">
-              <Receipt className="w-4 h-4" />
-            </span>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Transactions</h1>
-          </div>
-          <p className="text-sm text-slate-500">
-            Record sales and track cash, QR, and credit payments.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          className="bg-[#E3182D] hover:bg-red-700 text-white shadow-sm transition-all duration-200"
-          onClick={() => setSaleOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          New Sale
-        </Button>
-      </div>
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6">
+      <PageHeader
+        title="Transactions"
+        description="Sales and purchases, with cash, QR and credit (khata) payments."
+        icon={Receipt}
+        actions={
+          <Button onClick={() => setSaleOpen(true)}>
+            <Plus /> New transaction
+          </Button>
+        }
+      />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {stats && <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Today's Sales"
           value={formatCurrency(stats.todaySales)}
@@ -321,14 +272,14 @@ export default function Transactions() {
           value={formatCurrency(stats.totalSales)}
           icon={ShoppingCart}
           iconBg="bg-red-50/80"
-          iconColor="text-[#E3182D]"
+          iconColor="text-brand"
         />
         <StatCard
           title="Credit Sales"
           value={formatCurrency(stats.creditSales)}
           icon={CreditCard}
           iconBg="bg-red-50/80"
-          iconColor="text-[#E3182D]"
+          iconColor="text-brand"
         />
         <StatCard
           title="Pending Credit"
@@ -337,11 +288,11 @@ export default function Transactions() {
           iconBg="bg-amber-50/80"
           iconColor="text-amber-600"
         />
-      </div>
+      </div>}
 
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
         <div className="p-4 border-b border-slate-200/60 flex items-center justify-between gap-4 flex-wrap bg-slate-50/20">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full sm:w-auto">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full sm:w-auto overflow-x-auto">
             <TabsList className="h-9 border border-slate-200/40 p-0.5 rounded-lg bg-slate-100/80">
               <TabsTrigger value="all" className="text-xs font-semibold px-3 py-1 cursor-pointer">All</TabsTrigger>
               <TabsTrigger value="cash" className="text-xs font-semibold px-3 py-1 cursor-pointer">Cash</TabsTrigger>
@@ -353,10 +304,11 @@ export default function Transactions() {
           <div className="relative flex-grow sm:flex-grow-0">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input
-              placeholder="Search transactions..."
+              placeholder="Search transactions"
+              aria-label="Search transactions"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 w-full sm:w-60 bg-white border-slate-200 focus-visible:ring-red-500/20 focus-visible:border-[#E3182D]"
+              className="pl-9 w-full sm:w-60 bg-white border-slate-200 focus-visible:ring-red-500/20 focus-visible:border-brand"
             />
           </div>
         </div>
@@ -397,16 +349,16 @@ export default function Transactions() {
                   <table className="w-full">
                     <thead>
                       <tr className="bg-slate-50/70 border-b border-slate-200/60">
-                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                           Amount
                         </th>
-                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                           Due
                         </th>
-                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                           Status
                         </th>
-                        <th className="text-right px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="text-right px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                           Action
                         </th>
                       </tr>
@@ -417,21 +369,11 @@ export default function Transactions() {
                           <td className="px-6 py-4 font-bold text-slate-800">
                             {formatCurrency(Number(sale.credit_amount))}
                           </td>
-                          <td className="px-6 py-4 text-sm text-slate-650 font-medium">
-                            {sale.due_date}
+                          <td className="px-6 py-4 text-sm text-slate-600 font-medium">
+                            {formatDate(sale.due_date)}
                           </td>
                           <td className="px-6 py-4">
-                            <Badge
-                              className={cn("border-0 capitalize rounded-md shadow-none px-2.5 py-0.5 text-xs font-semibold", {
-                                "bg-amber-100 text-amber-700":
-                                  sale.status === "unpaid",
-                                "bg-red-100 text-red-700":
-                                  sale.status === "overdue",
-                                "bg-emerald-100 text-emerald-700":
-                                  sale.status === "paid",
-                              })}>
-                              {sale.status}
-                            </Badge>
+                            <CreditStatusBadge status={sale.status} />
                           </td>
                           <td className="px-6 py-4 text-right">
                             {sale.status !== "paid" && (
@@ -459,35 +401,34 @@ export default function Transactions() {
           </div>
         : filtered.length === 0 ?
           <EmptyState
-            title="No transactions yet"
-            description="Create a new sale to start recording revenue."
+            title={search || paymentFilter ? "No matching transactions" : "No transactions yet"}
+            description={search || paymentFilter ? "Try a different search or tab." : "Record a sale to start tracking revenue."}
           />
-        : <div className="overflow-x-auto">
+        : <div className="overflow-auto max-h-[65vh]">
             <table className="w-full">
-              <thead>
-                <tr className="bg-slate-50/70 border-b border-slate-200/60">
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-slate-50 border-b border-slate-200/60">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     ID
                   </th>
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Customer
                   </th>
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Method
                   </th>
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Type
                   </th>
-                  <th className="text-right px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-right px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Amount
                   </th>
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="text-left px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Date
                   </th>
-                  <th className="px-6 py-4" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -495,43 +436,33 @@ export default function Transactions() {
                   <tr
                     key={t.id}
                     className="hover:bg-slate-50/50 transition-colors duration-150 cursor-pointer group"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === "Enter" && setSelectedId(t.id)}
                     onClick={() => setSelectedId(t.id)}>
                     <td className="px-6 py-4 font-mono text-xs text-slate-500">
                       #{t.id.slice(0, 8)}
                     </td>
-                    <td className="px-6 py-4 text-sm font-semibold text-slate-800 tracking-tight group-hover:text-[#E3182D] transition-colors">
+                    <td className="px-6 py-4 text-sm font-semibold text-slate-800 tracking-tight group-hover:text-brand transition-colors">
                       {t.customer_id ?
                         (customerMap.get(t.customer_id) ?? "Customer")
                       : "Walk-in"}
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-2 text-sm text-slate-650 font-medium">
-                        <span className="w-6 h-6 rounded bg-slate-50 flex items-center justify-center border border-slate-150">
-                          <MethodIcon method={t.payment_type} />
-                        </span>
-                        {paymentLabel(t.payment_type)}
-                      </div>
+                      <PaymentBadge type={t.payment_type} />
                     </td>
                     <td className="px-6 py-4">
-                      <TransactionTypeBadge tx={t} />
+                      <span className="text-sm text-slate-600 capitalize">{t.transaction_type}</span>
                     </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-slate-850">
+                    <td className="px-6 py-4 text-right text-sm font-bold text-slate-800">
                       {formatCurrency(Number(t.total_amount))}
                     </td>
                     <td className="px-6 py-4">
-                      <StatusBadge tx={t} />
+                      <CreditStatusBadge status={txStatus(t)} />
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-500 font-medium">
-                      {formatKathmanduDateTime(t.created_at)}
+                      <RelativeTime value={t.created_at} />
                     </td>
-                    <td className="px-6 py-4">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-slate-400 hover:text-slate-700 h-8 w-8 hover:bg-slate-100 rounded-md">
-                        <Receipt className="w-3.5 h-3.5" />
-                      </Button>
-                    </td>
+
                   </tr>
                 ))}
               </tbody>
@@ -543,7 +474,7 @@ export default function Transactions() {
               >
                 {isFetchingNextPage ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin text-[#E3182D]" />
+                    <Loader2 className="w-4 h-4 animate-spin text-brand" />
                     <span>Loading more transactions...</span>
                   </>
                 ) : (
@@ -566,22 +497,22 @@ export default function Transactions() {
             Showing {transactions.length} of {totalMatching} transactions
           </p>
           {!hasNextPage && transactions.length > 0 && (
-            <span className="text-slate-400 font-medium">All loaded</span>
+            <span className="text-slate-500 font-medium">All loaded</span>
           )}
         </div>
       </div>
 
-      <Sheet open={!!selectedId} onOpenChange={() => setSelectedId(null)}>
-        <SheetContent className="w-105 overflow-y-auto">
+      <Sheet open={!!selectedId} onOpenChange={(o) => !o && setSelectedId(null)}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto">
           {selected && (
             <>
               <SheetHeader className="pb-4 border-b border-slate-100">
                 <SheetTitle className="font-bold text-slate-900">
-                  Sale — #{selected.id.slice(0, 8)}
+                  {selected.transaction_type === "purchase" ? "Purchase" : "Sale"} #{selected.id.slice(0, 8)}
                 </SheetTitle>
-                <StatusBadge tx={selected} />
+                <CreditStatusBadge status={txStatus(selected)} />
               </SheetHeader>
-              <div className="space-y-4 mt-5">
+              <div className="space-y-4 p-4">
                 <div className="bg-slate-50 rounded-lg p-4 space-y-3">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Customer</span>
@@ -600,7 +531,7 @@ export default function Transactions() {
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Date</span>
                     <span className="font-semibold text-slate-800">
-                      {formatKathmanduDateTime(selected.created_at)}
+                      {formatDateTime(selected.created_at)}
                     </span>
                   </div>
                   {selected.notes && (
@@ -631,6 +562,18 @@ export default function Transactions() {
                       </span>
                     </div>
                   ))}
+                  {selected.discount > 0 && (
+                    <div className="flex justify-between text-sm text-slate-500">
+                      <span>Discount</span>
+                      <span>-{formatCurrency(selected.discount)}</span>
+                    </div>
+                  )}
+                  {selected.credit_sale && (
+                    <div className="flex justify-between text-sm text-slate-500">
+                      <span>Credit due</span>
+                      <span>{formatDate(selected.credit_sale.due_date)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between pt-2">
                     <span className="font-bold text-slate-800">Total</span>
                     <span className="font-bold text-red-600 text-lg">
@@ -669,20 +612,34 @@ export default function Transactions() {
         }}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New Sale</DialogTitle>
+            <DialogTitle>New transaction</DialogTitle>
           </DialogHeader>
           <form onSubmit={submitSale} className="space-y-4">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Transaction type">
+              {(["sale", "purchase"] as TransactionType[]).map((type) => (
+                <Button
+                  key={type}
+                  type="button"
+                  role="radio"
+                  aria-checked={txType === type}
+                  variant={txType === type ? "default" : "outline"}
+                  onClick={() => {
+                    setTxType(type);
+                    setCart([]);
+                  }}>
+                  {type === "sale" ? "Sale" : "Purchase (stock in)"}
+                </Button>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Payment method">
               {(["cash", "qr", "credit"] as PaymentType[]).map((type) => (
                 <Button
                   key={type}
                   type="button"
-                  variant={paymentType === type ? "default" : "outline"}
-                  className={
-                    paymentType === type ?
-                      "bg-red-600 hover:bg-red-700 text-white"
-                    : ""
-                  }
+                  role="radio"
+                  aria-checked={paymentType === type}
+                  variant={paymentType === type ? "secondary" : "outline"}
+                  className={paymentType === type ? "ring-2 ring-brand/40" : ""}
                   onClick={() => setPaymentType(type)}>
                   {paymentLabel(type)}
                 </Button>
@@ -690,12 +647,13 @@ export default function Transactions() {
             </div>
 
             <div className="space-y-2">
-              <Label>
+              <Label htmlFor="tx-customer">
                 Customer{" "}
                 {paymentType === "credit" ? "(required)" : "(optional)"}
               </Label>
               <select
-                className="w-full h-10 rounded-md border border-slate-200 px-3 text-sm"
+                id="tx-customer"
+                className="w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                 value={customerId}
                 required={paymentType === "credit"}
                 onChange={(e) => setCustomerId(e.target.value)}>
@@ -708,12 +666,24 @@ export default function Transactions() {
               </select>
             </div>
 
+            {creditCustomer && (
+              <p className="text-xs text-muted-foreground -mt-2">
+                Owes {formatCurrency(creditCustomer.current_outstanding_balance)} of{" "}
+                {formatCurrency(creditCustomer.credit_limit)} limit ·{" "}
+                <span className={availableCredit ? "text-success font-medium" : "text-danger font-medium"}>
+                  {formatCurrency(availableCredit ?? 0)} available
+                </span>
+              </p>
+            )}
+
             {paymentType === "credit" && (
               <div className="space-y-2">
-                <Label>Due date</Label>
+                <Label htmlFor="tx-due">Due date</Label>
                 <Input
+                  id="tx-due"
                   type="date"
                   required
+                  min={new Date().toISOString().slice(0, 10)}
                   value={dueDate}
                   onChange={(e) => setDueDate(e.target.value)}
                 />
@@ -721,19 +691,20 @@ export default function Transactions() {
             )}
 
             <div className="space-y-2">
-              <Label>Add product</Label>
+              <Label htmlFor="tx-product">Add product</Label>
               <div className="flex gap-2">
                 <select
-                  className="flex-1 h-10 rounded-md border border-slate-200 px-3 text-sm"
+                  id="tx-product"
+                  className="flex-1 min-w-0 h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                   value={productPick}
                   onChange={(e) => setProductPick(e.target.value)}>
                   <option value="">Select product...</option>
                   {(products ?? [])
-                    .filter((p) => p.stock_quantity > 0)
+                    .filter((p) => txType === "purchase" || p.stock_quantity > 0)
                     .map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.product_name} ({p.stock_quantity} {p.unit}) —{" "}
-                        {formatCurrency(p.selling_price)}
+                        {p.product_name} ({p.stock_quantity} {p.unit}) ·{" "}
+                        {formatCurrency(txType === "sale" ? p.selling_price : p.cost_price)}
                       </option>
                     ))}
                 </select>
@@ -758,6 +729,9 @@ export default function Transactions() {
                     <Input
                       type="number"
                       min={1}
+                      max={txType === "sale" ? stockOf(line.product_id) : undefined}
+                      aria-label={`Quantity of ${line.name}`}
+                      aria-invalid={txType === "sale" && line.quantity > stockOf(line.product_id)}
                       className="w-16 h-8"
                       value={line.quantity}
                       onChange={(e) =>
@@ -777,6 +751,7 @@ export default function Transactions() {
                       type="button"
                       variant="ghost"
                       size="sm"
+                      aria-label={`Remove ${line.name}`}
                       className="text-red-500 h-8 w-8 p-0"
                       onClick={() =>
                         setCart((prev) =>
@@ -792,8 +767,9 @@ export default function Transactions() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Discount</Label>
+                <Label htmlFor="tx-discount">Discount</Label>
                 <Input
+                  id="tx-discount"
                   type="number"
                   min={0}
                   value={discount}
@@ -801,7 +777,7 @@ export default function Transactions() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Total</Label>
+                <p className="text-sm font-medium">Total</p>
                 <div className="h-10 flex items-center font-bold text-red-600 text-lg">
                   {formatCurrency(Math.max(0, cartTotal))}
                 </div>
@@ -809,9 +785,11 @@ export default function Transactions() {
             </div>
 
             <div className="space-y-2">
-              <Label>Notes</Label>
-              <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+              <Label htmlFor="tx-notes">Notes</Label>
+              <Input id="tx-notes" placeholder="Optional" value={notes} onChange={(e) => setNotes(e.target.value)} />
             </div>
+
+            {cartError && <p className="text-sm text-danger" role="alert">{cartError}</p>}
 
             <DialogFooter>
               <Button
@@ -820,13 +798,9 @@ export default function Transactions() {
                 onClick={() => setSaleOpen(false)}>
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="bg-red-600 hover:bg-red-700 text-white"
-                disabled={createTx.isPending || cart.length === 0}>
-                {createTx.isPending ?
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                : "Record Sale"}
+              <Button type="submit" disabled={createTx.isPending || cart.length === 0 || !!cartError}>
+                {createTx.isPending && <Loader2 className="animate-spin" />}
+                {txType === "sale" ? "Record sale" : "Record purchase"}
               </Button>
             </DialogFooter>
           </form>

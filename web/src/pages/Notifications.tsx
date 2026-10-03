@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '@/provider/AuthProvider';
+import { useShopId } from '@/providers/AuthProvider';
 import { useLowStockProducts } from '@/hooks/useInventory';
 import { useCreditSales } from '@/hooks/useTransactions';
-import { useCustomers } from '@/hooks/useCustomers';
 import { PageSkeleton } from '@/components/ui/LoadingSkeleton';
-import { EmptyState } from '@/components/ui/StateComponents';
+import { EmptyState, ErrorState } from '@/components/ui/StateComponents';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Bell, Package, ShieldAlert, CreditCard } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatCurrency } from '@/utils/format';
+import { formatCurrency, formatDate, formatDateTime, formatRelative } from '@/utils/format';
 import { ROUTES } from '@/constants/routes';
 
 type NotifType = 'inventory' | 'credit' | 'payment';
@@ -21,7 +21,7 @@ type AppNotification = {
   message: string;
   type: NotifType;
   href: string;
-  time: string;
+  at: string;
 };
 
 const typeConfig = {
@@ -46,21 +46,18 @@ const typeConfig = {
 };
 
 export default function Notifications() {
-  const { activeShop } = useAuth();
-  const shopId = activeShop?.id ?? '';
-  const { data: lowStock, isLoading: loadingLow } = useLowStockProducts(shopId);
-  const { data: unpaid, isLoading: loadingUnpaid } = useCreditSales(shopId, 'unpaid');
-  const { data: overdue, isLoading: loadingOverdue } = useCreditSales(shopId, 'overdue');
-  const { data: paid, isLoading: loadingPaid } = useCreditSales(shopId, 'paid');
-  const { data: customers } = useCustomers(shopId);
+  const shopId = useShopId();
+  const low = useLowStockProducts(shopId);
+  const unpaidQ = useCreditSales(shopId, 'unpaid');
+  const overdueQ = useCreditSales(shopId, 'overdue');
+  const paidQ = useCreditSales(shopId, 'paid');
+  const lowStock = low.data;
+  const unpaid = unpaidQ.data;
+  const overdue = overdueQ.data;
+  const paid = paidQ.data;
+  const queries = [low, unpaidQ, overdueQ, paidQ];
   const [activeFilter, setActiveFilter] = useState<'all' | NotifType>('all');
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-
-  const customerMap = useMemo(() => {
-    const m = new Map<string, string>();
-    (customers ?? []).forEach((c) => m.set(c.id, c.full_name));
-    return m;
-  }, [customers]);
 
   const notifications = useMemo(() => {
     const list: AppNotification[] = [];
@@ -72,7 +69,7 @@ export default function Notifications() {
         message: `${p.product_name} has ${p.stock_quantity} ${p.unit} left (reorder at ${p.reorder_level}).`,
         type: 'inventory',
         href: ROUTES.INVENTORY,
-        time: new Date(p.updated_at).toLocaleString('en-IN'),
+        at: p.updated_at,
       });
     });
 
@@ -80,12 +77,12 @@ export default function Notifications() {
       list.push({
         id: `credit-${sale.id}`,
         title: sale.status === 'overdue' ? 'Payment Overdue' : 'Unpaid Credit',
-        message: `Credit of ${formatCurrency(sale.credit_amount)} due ${sale.due_date}${
+        message: `Credit of ${formatCurrency(sale.credit_amount)} due ${formatDate(sale.due_date)}${
           sale.remarks ? ` — ${sale.remarks}` : ''
         }.`,
         type: 'credit',
         href: ROUTES.TRANSACTIONS,
-        time: new Date(sale.created_at).toLocaleString('en-IN'),
+        at: sale.created_at,
       });
     });
 
@@ -102,37 +99,30 @@ export default function Notifications() {
           }.`,
           type: 'payment',
           href: ROUTES.TRANSACTIONS,
-          time: new Date(sale.paid_at ?? sale.created_at).toLocaleString('en-IN'),
+          at: sale.paid_at ?? sale.created_at,
         });
       });
 
-    // Suppress unused warning — customer names available if backend adds customer_id later
-    void customerMap;
-
     return list.filter((n) => !dismissed.has(n.id));
-  }, [lowStock, unpaid, overdue, paid, dismissed, customerMap]);
+  }, [lowStock, unpaid, overdue, paid, dismissed]);
 
   const filtered = notifications.filter(
     (n) => activeFilter === 'all' || n.type === activeFilter
   );
 
-  if (!shopId || loadingLow || loadingUnpaid || loadingOverdue || loadingPaid) {
-    return <PageSkeleton />;
+  if (!shopId || queries.some((q) => q.isLoading)) return <PageSkeleton />;
+  if (queries.some((q) => q.isError)) {
+    return <ErrorState message="Could not load alerts." onRetry={() => queries.forEach((q) => q.refetch())} />;
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-slate-900">Notifications</h1>
-          {notifications.length > 0 && (
-            <Badge className="bg-red-100 text-red-700 border-0 font-bold">
-              {notifications.length}
-            </Badge>
-          )}
-        </div>
-        <p className="text-xs text-slate-400">Built from live inventory & credit data</p>
-      </div>
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-6">
+      <PageHeader
+        title="Alerts"
+        description="Low stock and credit alerts from your live inventory and credit sales."
+        icon={Bell}
+        actions={notifications.length > 0 && <Badge variant="destructive">{notifications.length} open</Badge>}
+      />
 
       <div className="flex gap-2 flex-wrap">
         {(['all', 'inventory', 'credit', 'payment'] as const).map((f) => (
@@ -142,7 +132,7 @@ export default function Notifications() {
             className={cn(
               'px-3 py-1.5 rounded-md text-xs font-semibold capitalize transition-colors',
               activeFilter === f
-                ? 'bg-red-600 text-white'
+                ? 'bg-brand text-white'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             )}
           >
@@ -179,12 +169,14 @@ export default function Notifications() {
                     <div>
                       <p className="text-sm font-bold text-slate-900">{n.title}</p>
                       <p className="text-sm text-slate-600 mt-0.5">{n.message}</p>
-                      <p className="text-xs text-slate-400 mt-1">{n.time}</p>
+                      <time className="text-xs text-slate-500 mt-1 block" dateTime={n.at} title={formatDateTime(n.at)}>
+                        {formatRelative(n.at)}
+                      </time>
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="text-slate-400 h-8"
+                      className="text-slate-500 h-8"
                       onClick={() => setDismissed((prev) => new Set(prev).add(n.id))}
                     >
                       Dismiss
@@ -192,7 +184,7 @@ export default function Notifications() {
                   </div>
                   <Link
                     to={n.href}
-                    className="text-xs font-semibold text-red-600 hover:underline mt-2 inline-block"
+                    className="text-xs font-semibold text-brand hover:underline mt-2 inline-block"
                   >
                     View details →
                   </Link>

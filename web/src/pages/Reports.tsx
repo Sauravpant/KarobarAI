@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { useAuth } from '@/provider/AuthProvider';
+import { useShopId } from '@/providers/AuthProvider';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { useDashboard } from '@/hooks/useDashboard';
 import { PageSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ErrorState, EmptyState } from '@/components/ui/StateComponents';
@@ -20,25 +21,24 @@ import {
   Legend,
 } from 'recharts';
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3 } from 'lucide-react';
-import { formatCurrency } from '@/utils/format';
+import { formatCompact, formatCurrency } from '@/utils/format';
 
-const COLORS = ['#E3182D', '#3b82f6', '#10b981', '#f59e0b', '#6366f1'];
+// Cash / Credit / QR, matching the dashboard's payment colors
+const COLORS = ['#10b981', '#f59e0b', '#64748b'];
 
-const formatChartValue = (value: number | string | Array<number | string> | undefined) =>
-  formatCurrency(Number(Array.isArray(value) ? value[0] ?? 0 : value ?? 0));
+const formatChartValue = (value: unknown) => formatCurrency(Number(value));
 
 export default function Reports() {
-  const { activeShop } = useAuth();
-  const shopId = activeShop?.id ?? '';
+  const shopId = useShopId();
   const { data, isLoading, isError, refetch } = useDashboard(shopId);
 
   const paymentPie = useMemo(() => {
     if (!data) return [];
     const p = data.revenue_by_payment;
     return [
-      { name: 'Cash', value: p.cash },
-      { name: 'Credit', value: p.credit },
-      { name: 'QR', value: p.qr },
+      { name: 'Cash', value: p.cash, color: COLORS[0] },
+      { name: 'Credit', value: p.credit, color: COLORS[1] },
+      { name: 'QR', value: p.qr, color: COLORS[2] },
     ].filter((x) => x.value > 0);
   }, [data]);
 
@@ -56,20 +56,19 @@ export default function Reports() {
   );
 
   if (!shopId || isLoading) return <PageSkeleton />;
-  if (isError || !data) return <ErrorState onRetry={refetch} />;
+  if (isError || !data) return <ErrorState message="Could not load report data." onRetry={refetch} />;
 
   const s = data.summary;
   const avgOrder =
     s.total_transactions > 0 ? Math.round(s.total_revenue / s.total_transactions) : 0;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto flex flex-col gap-6">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 text-[#E3182D]">
-          <BarChart3 className="w-4 h-4" />
-        </span>
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Reports & Analytics</h1>
-      </div>
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6">
+      <PageHeader
+        title="Reports"
+        description="Revenue, profit, payment mix and category performance from your dashboard data."
+        icon={BarChart3}
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
@@ -84,7 +83,7 @@ export default function Reports() {
           value={formatCurrency(s.total_profit)}
           icon={TrendingUp}
           iconBg="bg-red-50/80"
-          iconColor="text-[#E3182D]"
+          iconColor="text-brand"
         />
         <StatCard
           title="Total Orders"
@@ -104,7 +103,7 @@ export default function Reports() {
 
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-6 transition-all duration-300 hover:shadow-md hover:shadow-slate-100/50">
         <h2 className="text-base font-bold text-slate-900 tracking-tight mb-1">Revenue vs Profit</h2>
-        <p className="text-xs text-slate-400 mb-4">Last 7 days</p>
+        <p className="text-xs text-slate-500 mb-4">Last 7 days</p>
         {salesTrend.length === 0 ? (
           <EmptyState title="No sales yet" description="Record transactions to see trends." />
         ) : (
@@ -116,13 +115,13 @@ export default function Reports() {
                   <stop offset="95%" stopColor="#E3182D" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} />
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#FF6B35" stopOpacity={0.1} />
+                  <stop offset="95%" stopColor="#FF6B35" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
               <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis tick={{ fontSize: 12, fill: '#94a3b8' }} />
+              <YAxis tick={{ fontSize: 12, fill: '#94a3b8' }} tickFormatter={formatCompact} />
               <Tooltip
                 formatter={formatChartValue}
                 contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
@@ -138,7 +137,7 @@ export default function Reports() {
               <Area
                 type="monotone"
                 dataKey="profit"
-                stroke="#3b82f6"
+                stroke="#FF6B35"
                 fill="url(#colorProfit)"
                 strokeWidth={2}
               />
@@ -163,11 +162,11 @@ export default function Reports() {
                   cy="50%"
                   outerRadius={80}
                   label={({ name, percent }) =>
-                    `${name} ${(percent * 100).toFixed(0)}%`
+                    `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
                   }
                 >
-                  {paymentPie.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  {paymentPie.map((p) => (
+                    <Cell key={p.name} fill={p.color} />
                   ))}
                 </Pie>
                 <Tooltip formatter={formatChartValue} />
@@ -211,16 +210,16 @@ export default function Reports() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50/70 border-y border-slate-200/60">
-                  <th className="text-left px-6 py-3.5 text-xs font-bold text-slate-405 uppercase tracking-wider">
+                  <th className="text-left px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Category
                   </th>
-                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-405 uppercase tracking-wider">
+                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Products
                   </th>
-                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-405 uppercase tracking-wider">
+                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Revenue
                   </th>
-                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-405 uppercase tracking-wider">
+                  <th className="text-right px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Profit
                   </th>
                 </tr>
@@ -230,7 +229,7 @@ export default function Reports() {
                   <tr key={c.category_name} className="hover:bg-slate-50/40 transition-colors">
                     <td className="px-6 py-3.5 font-semibold text-slate-800">{c.category_name}</td>
                     <td className="px-6 py-3.5 text-right text-slate-600 font-medium">{c.product_count}</td>
-                    <td className="px-6 py-3.5 text-right font-bold text-slate-850">
+                    <td className="px-6 py-3.5 text-right font-bold text-slate-800">
                       {formatCurrency(c.revenue)}
                     </td>
                     <td className="px-6 py-3.5 text-right text-emerald-600 font-bold">
