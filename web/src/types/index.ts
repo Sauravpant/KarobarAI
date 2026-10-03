@@ -4,21 +4,19 @@ export interface ApiUser {
   id: string;
   full_name: string;
   email: string;
-  phone: string;
+  phone: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface TokenData {
   access_token: string;
-  token_type?: string;
-  refresh_token?: string;
+  token_type: string;
 }
 
 export interface LoginResponse {
   user: ApiUser;
-  token?: TokenData;
-  access_token?: string;
+  token: TokenData;
 }
 
 export interface LoginPayload {
@@ -30,7 +28,7 @@ export interface RegisterPayload {
   full_name: string;
   email: string;
   password: string;
-  phone: string;
+  phone?: string;
 }
 
 // ── Generic API wrapper ───────────────────────────────────────────────────────
@@ -72,7 +70,7 @@ export interface UpdateShopPayload {
 export interface Category {
   id: string;
   name: string;
-  description?: string;
+  description: string | null;
 }
 
 export interface CreateCategoryPayload {
@@ -93,7 +91,7 @@ export interface Product {
   category_id: string;
   product_name: string;
   sku: string;
-  barcode?: string;
+  barcode: string | null;
   unit: string;
   stock_quantity: number;
   cost_price: number;
@@ -131,11 +129,12 @@ export interface UpdateProductPayload {
   reorder_level?: number;
   is_staple?: boolean;
   is_perishable?: boolean;
+  is_active?: boolean;
 }
 
 export interface StockAdjustPayload {
   quantity: number;
-  reason: string;
+  reason?: string;
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────────
@@ -144,8 +143,8 @@ export interface Customer {
   id: string;
   shop_id: string;
   full_name: string;
-  phone: string;
-  address?: string;
+  phone: string | null;
+  address: string | null;
   credit_limit: number;
   current_outstanding_balance: number;
   max_outstanding_ever: number;
@@ -156,7 +155,7 @@ export interface Customer {
 
 export interface CreateCustomerPayload {
   full_name: string;
-  phone: string;
+  phone?: string;
   address?: string;
   credit_limit: number;
 }
@@ -166,6 +165,7 @@ export interface UpdateCustomerPayload {
   phone?: string;
   address?: string;
   credit_limit?: number;
+  is_active?: boolean;
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
@@ -190,23 +190,21 @@ export interface CreditSale {
   status: CreditStatus;
   remarks: string | null;
   created_at: string;
-  transaction_id?: string;
-  customer_id?: string;
 }
 
 export interface Transaction {
   id: string;
   shop_id: string;
-  customer_id?: string;
+  customer_id: string | null;
   transaction_type: TransactionType;
   payment_type: PaymentType;
   subtotal: number;
   discount: number;
   total_amount: number;
-  notes?: string;
+  notes: string | null;
   created_at: string;
   items: TransactionItem[];
-  credit_sale?: CreditSale;
+  credit_sale: CreditSale | null;
 }
 
 export interface TransactionStats {
@@ -223,7 +221,7 @@ export interface PaginatedTransactions {
   page: number;
   limit: number;
   has_more: boolean;
-  stats?: TransactionStats;
+  stats: TransactionStats | null;
 }
 
 export interface CreateTransactionItemPayload {
@@ -232,6 +230,7 @@ export interface CreateTransactionItemPayload {
 }
 
 export interface CreateTransactionPayload {
+  transaction_type?: TransactionType;
   payment_type: PaymentType;
   discount?: number;
   notes?: string;
@@ -241,7 +240,7 @@ export interface CreateTransactionPayload {
 }
 
 export interface UpdateCreditSalePayload {
-  status: CreditStatus;
+  status?: CreditStatus;
   remarks?: string;
 }
 
@@ -301,32 +300,34 @@ export interface DashboardData {
   inventory_status: InventoryStatus;
 }
 
+export interface RestockSuggestion {
+  product_name: string;
+  sold_today: number;
+  current_stock: number;
+  predicted_tomorrow: number;
+  needs_restock: boolean;
+}
+
+/** GET /shops/{shop_id}/dashboard/brief */
+export interface DailyBrief {
+  brief_date: string;
+  transcript: string;
+  audio_url: string | null;
+  total_sales: number;
+  total_credit_today: number;
+  highest_credit_customer: { name: string; outstanding_balance: number } | null;
+  top_selling_product: string | null;
+  min_selling_product: string | null;
+  low_stock_alerts: string[];
+  restock_suggestions: RestockSuggestion[];
+  ai_insight: string;
+}
+
 // ── ML Credit Risk ────────────────────────────────────────────────────────────
 
 export interface ShapFeature {
   feature: string;
   shap_value: number;
-}
-
-export interface CreditRiskFeatures {
-  relationship_days: number;
-  cash_purchase_value_last_30d: number;
-  credit_purchase_value_last_30d: number;
-  transaction_count_last_30d: number;
-  credit_transaction_count_last_30d: number;
-  avg_purchase_amount: number;
-  avg_credit_transaction_amount: number;
-  credit_to_purchase_ratio: number;
-  current_outstanding_balance: number;
-  outstanding_to_avg_transaction_ratio: number;
-  pct_repaid_on_time: number;
-  avg_days_to_repay: number;
-  repayment_consistency: number;
-  historical_repayment_ratio: number;
-  num_completed_credit_cycles: number;
-  num_severely_late_repayments: number;
-  max_outstanding_ever: number;
-  days_since_last_purchase: number;
 }
 
 export interface CreditRiskPrediction {
@@ -340,7 +341,15 @@ export interface CreditRiskPrediction {
   computed_features?: Record<string, number>;
 }
 
-export interface CreditRiskExplanation extends CreditRiskPrediction {
+/** Server-side limit suggestion; added to predict/explain responses. */
+export interface CreditLimitSuggestion {
+  current_credit_limit: number;
+  recommended_credit_limit: number;
+  limit_reason: string;
+  risk_level: 'low' | 'medium' | 'high';
+}
+
+export interface CreditRiskExplanation extends CreditRiskPrediction, CreditLimitSuggestion {
   base_probability: number;
   top_positive_features: ShapFeature[];
   top_negative_features: ShapFeature[];
@@ -355,12 +364,6 @@ export interface CreditRiskGlobalImportance {
 }
 
 // ── ML Demand ─────────────────────────────────────────────────────────────────
-
-/** Backend demand explain uses 'impact' (not 'shap_value') */
-export interface DemandShapFeature {
-  feature: string;
-  impact: number;
-}
 
 export interface DemandForecastDay {
   forecast_date: string;
@@ -387,32 +390,11 @@ export interface DemandStockSummary {
   summary: string;
 }
 
-export interface DemandForecastRequest {
-  shop_id: string;
-  category: string;
-  location_type: string;
-  is_staple: number;
-  is_perishable: number;
-  last_date: string;
-  sales_history: number[];
-  transactions_history: number[];
-}
-
-/** Response from /explain-next-day and /explain-next-7-days */
-export interface DemandForecastExplainDay {
-  forecast_date: string;
-  prediction: number;
-  base_value: number;
-  top_positive_features: DemandShapFeature[];
-  top_negative_features: DemandShapFeature[];
-  feature_contributions: Record<string, number>;
-  human_readable_explanation: string;
-}
-
+/** native rows: { feature, importance }; SHAP rows: { feature, mean_abs_shap } */
 export interface DemandGlobalImportanceEntry {
   feature: string;
-  importance: number;
-  rank?: number;
+  importance?: number;
+  mean_abs_shap?: number;
 }
 
 export interface DemandGlobalImportance {
