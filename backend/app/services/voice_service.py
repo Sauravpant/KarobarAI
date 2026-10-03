@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import re
@@ -545,9 +546,8 @@ def confirm_voice_transactions(
     parts = []
     for p in processed:
         if p.action == "sale":
-            p.product_name = clean_product_name(p.product_name)
             parts.append(
-                f"{p.product_name} {p.quantity} बिक्री भयो। भण्डारमा {p.new_stock} बाँकी।"
+                f"{clean_product_name(p.product_name)} {p.quantity} बिक्री भयो। भण्डारमा {p.new_stock} बाँकी।"
             )
         else:
             parts.append(
@@ -559,6 +559,46 @@ def confirm_voice_transactions(
         confirmation_text=confirmation_text,
         processed=processed,
     )
+
+
+CONFIRMATION_LLM_TIMEOUT_S = 6  # per provider; user is waiting on the confirmation audio
+
+_CONFIRMATION_PROMPT = """You write the spoken confirmation a Nepali shopkeeper hears after saving transactions.
+Rewrite the records below as short, natural spoken Nepali.
+
+Rules:
+- Nepali only, in Devanagari. Translate English product names to the common Nepali word (Sugar -> चिनी, Rice -> चामल, Oil -> तेल). Transliterate brand names (Wai Wai -> वाइवाइ).
+- Pack size in the product name (1kg, 500g, 1L) is part of the product: "Sugar 1kg" sold 5 means पाँच प्याकेट एक किलोको चिनी, not 15 kg.
+- Say each quantity and remaining stock exactly as given. Do not round, sum, or invent numbers.
+- sale: say it was sold and how much stock remains. purchase: say it was added to stock and the new total.
+- Plain text for text-to-speech: no English, no digits in Latin script, no markdown, no lists, no emojis. One or two sentences per record.
+
+Records (JSON):
+{records}"""
+
+
+async def polish_confirmation(result: VoiceConfirmResponse) -> VoiceConfirmResponse:
+    """Rewrite the template confirmation as natural Nepali. Keeps the template on LLM failure."""
+    if not result.processed:
+        return result
+    records = json.dumps(
+        [
+            {"action": p.action, "product": p.product_name, "quantity": p.quantity, "stock_now": p.new_stock}
+            for p in result.processed
+        ],
+        ensure_ascii=False,
+    )
+    try:
+        text = await llm_service.generate(
+            _CONFIRMATION_PROMPT.format(records=records),
+            temperature=0.2,
+            timeout=CONFIRMATION_LLM_TIMEOUT_S,
+        )
+    except Exception as exc:
+        logger.warning("Confirmation LLM failed, using template: %r", exc)
+        return result
+    result.confirmation_text = text
+    return result
 
 def match_extracted_items(
     db: Session,

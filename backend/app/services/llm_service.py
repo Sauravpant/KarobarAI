@@ -131,15 +131,16 @@ async def generate(
     *,
     json_schema: Optional[type[T]] = None,
     temperature: float = 0.3,
+    timeout: float = LLM_TIMEOUT_S,
 ) -> str | T:
     """Gemini -> Groq -> OpenRouter. Returns text, or a validated `json_schema` instance.
 
-    A tier fails on exception, timeout, empty output, or (JSON mode) schema validation error.
+    A tier fails on exception, `timeout` (per provider), empty output, or (JSON mode) schema validation error.
     """
     errors = []
     for name, call in _PROVIDERS:
         try:
-            raw = await asyncio.wait_for(call(prompt, json_schema, temperature), LLM_TIMEOUT_S)
+            raw = await asyncio.wait_for(call(prompt, json_schema, temperature), timeout)
             if not raw.strip():
                 raise ValueError("empty response")
             result = json_schema.model_validate_json(raw) if json_schema else raw.strip()

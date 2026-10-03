@@ -63,15 +63,17 @@ async def extract_transactions(
     )
 
 @router.post("/confirm", response_model=ApiResponse[VoiceConfirmResponse])
-def confirm_transactions(
+async def confirm_transactions(
     shop_id: uuid.UUID,
     payload: VoiceConfirmRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = voice_service.confirm_voice_transactions(
-        db, current_user, shop_id, payload
+    result = await asyncio.to_thread(
+        voice_service.confirm_voice_transactions,
+        db, current_user, shop_id, payload,
     )
+    result = await voice_service.polish_confirmation(result)
     return ApiResponse(message="Voice transactions confirmed", data=result)
 
 @router.post("/confirm-with-audio")
@@ -85,6 +87,7 @@ async def confirm_with_audio(
         voice_service.confirm_voice_transactions,
         db, current_user, shop_id, payload,
     )
+    result = await voice_service.polish_confirmation(result)
     audio_bytes = await voice_service.synthesize_speech(result.confirmation_text)
     headers = {
         "X-Confirmation-Text": urllib.parse.quote(result.confirmation_text),
