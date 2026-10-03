@@ -1,56 +1,45 @@
+import { Suspense, type ReactNode } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import MainLayout from '@/layouts/MainLayout';
 import AuthLayout from '@/layouts/AuthLayout';
-import Dashboard from '@/pages/Dashboard';
-import Inventory from '@/pages/Inventory';
-import Categories from '@/pages/Categories';
-import CreditRisk from '@/pages/CreditRisk';
-import Customers from '@/pages/Customers';
-import Transactions from '@/pages/Transactions';
-import DemandForecast from '@/pages/DemandForecast';
-import Reports from '@/pages/Reports';
-import Notifications from '@/pages/Notifications';
-import Settings from '@/pages/Settings';
-import Login from '@/pages/Login';
-import Register from '@/pages/Register';
-import ShopSetup from '@/pages/ShopSetup';
-import VyaparVoice from '@/pages/VyaparVoice';
+import { PageSkeleton } from '@/components/ui/LoadingSkeleton';
+import { Pages } from '@/routes/pages';
+
+const page = (el: ReactNode) => <Suspense fallback={<PageSkeleton />}>{el}</Suspense>;
 
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <MainLayout />,
+    element: page(<Pages.MainLayout />),
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
-      { path: 'dashboard', element: <Dashboard /> },
-      { path: 'inventory', element: <Inventory /> },
-      { path: 'categories', element: <Categories /> },
-      { path: 'credit-risk', element: <CreditRisk /> },
-      { path: 'customers', element: <Customers /> },
-      { path: 'transactions', element: <Transactions /> },
-      { path: 'demand-forecasting', element: <DemandForecast /> },
-      { path: 'vyapar-voice', element: <VyaparVoice /> },
-      { path: 'reports', element: <Reports /> },
-      { path: 'notifications', element: <Notifications /> },
-      { path: 'settings', element: <Settings /> },
-      { path: 'shop-setup', element: <ShopSetup /> },
+      { path: 'dashboard', element: page(<Pages.Dashboard />) },
+      { path: 'inventory', element: page(<Pages.Inventory />) },
+      { path: 'categories', element: page(<Pages.Categories />) },
+      { path: 'credit-risk', element: page(<Pages.CreditRisk />) },
+      { path: 'customers', element: page(<Pages.Customers />) },
+      { path: 'transactions', element: page(<Pages.Transactions />) },
+      { path: 'demand-forecasting', element: page(<Pages.DemandForecast />) },
+      { path: 'reports', element: page(<Pages.Reports />) },
+      { path: 'notifications', element: page(<Pages.Notifications />) },
+      { path: 'settings', element: page(<Pages.Settings />) },
+      { path: 'shop-setup', element: page(<Pages.ShopSetup />) },
     ],
   },
   {
     element: <AuthLayout />,
     children: [
-      { path: 'login', element: <Login /> },
-      { path: 'register', element: <Register /> },
+      { path: 'login', element: page(<Pages.Login />) },
+      { path: 'register', element: page(<Pages.Register />) },
     ],
   },
   {
     path: '*',
     element: (
-      <div className="flex flex-col items-center justify-center min-h-screen text-center bg-slate-50">
+      <div className="flex flex-col items-center justify-center min-h-screen text-center bg-background">
         <p className="text-8xl font-black text-slate-200 mb-4">404</p>
         <p className="text-slate-500 font-medium text-lg">Page not found</p>
-        <a href="/" className="mt-6 text-red-600 font-medium hover:underline">
-          Return Home
+        <a href="/" className="mt-6 text-brand font-medium hover:underline">
+          Return home
         </a>
       </div>
     ),
