@@ -78,9 +78,9 @@ Remove the credit-risk model and the forecaster and it's just another ledger —
                ▼                             ▼                             ▼
  ┌───────────────────────────┐  ┌─────────────────────────┐   ┌─────────────────────────┐
  │       EXTERNAL APIs       │  │        PostgreSQL       │   │  Model files (.joblib)  │
- │       ElevenLabs STT      │  │    ledger · customers   │   │       credit_risk       │
+ │       ElevenLabs STT      │  │    ledger · customers   │   │          credit         │
  │ Gemini → Groq → OpenRouter│  │ inventory · transactions│   │          demand         │
- │   Sarvam TTS / Edge-TTS   │  │                         │   │                         │
+ │Edge→Sarvam→ElevenLabs→gTTS│  │                         │   │                         │
  └───────────────────────────┘  └────────────┬────────────┘   └────────────▲────────────┘
                                              │ new transactions            │
         ┌────────────────────────────────────┘          deploy new models  │
@@ -106,7 +106,7 @@ Remove the credit-risk model and the forecaster and it's just another ledger —
 | Mobile | React Native (Expo) |
 | Backend | FastAPI (Python) |
 | Database | PostgreSQL (Neon) |
-| STT / TTS | ElevenLabs STT; Sarvam AI TTS (Edge-TTS fallback) |
+| STT / TTS | ElevenLabs Scribe v2 STT; TTS chain Edge-TTS → Sarvam AI → ElevenLabs → gTTS |
 | LLM | Gemini → Groq → OpenRouter (fallback chain) |
 | ML | XGBoost / CatBoost / LightGBM, SHAP |
 | Infra | Docker, Docker Compose, nginx |
@@ -116,15 +116,102 @@ Remove the credit-risk model and the forecaster and it's just another ledger —
 ```
 DeepStack/
 ├── README.md
-├── .gitignore
-├── docker-compose.yml
-├── frontend/     # React + Vite web dashboard
-├── mobile/       # React Native (Expo) app
-└── backend/
-    ├── app/      # FastAPI: api, core, db, models, schemas, services
-    └── ml/
-        ├── credit_risk/   # train.py, src/, inference/, models/*.joblib
-        └── demand/        # train.py, src/, inference/, models/*.joblib
+├── CLAUDE.md                     # contributor/agent guide (one per app too)
+├── docker-compose.yml            # backend :8000 + web :3000
+├── DOCUMENTATION.md              # full project documentation
+│
+├── backend/                      # FastAPI + PostgreSQL + ML
+│   ├── Dockerfile                # python:3.14-slim + ffmpeg + libgomp1
+│   ├── requirements.txt
+│   ├── alembic.ini
+│   ├── .env.example
+│   ├── tests/
+│   │   └── test_core.py          # unittest, in-memory SQLite
+│   ├── app/
+│   │   ├── main.py               # app, CORS, error handlers, routers, lifespan (loads models, warms DB pool)
+│   │   ├── seed.py               # demo categories + products
+│   │   ├── seed_transactions.py  # demo sales history (weekday + festival patterns)
+│   │   ├── api/                  # thin routers
+│   │   │   ├── auth.py  shops.py  categories.py  products.py  customers.py
+│   │   │   ├── transactions.py   # ledger + credit sales
+│   │   │   ├── dashboard.py      # dashboard, daily brief, brief audio
+│   │   │   ├── credit_risk.py    # /ml/credit-risk + per-customer routes
+│   │   │   ├── demand_forecast.py# /ml/demand + per-product routes
+│   │   │   └── voice.py          # transcribe, extract, confirm, confirm-with-audio, tts
+│   │   ├── services/             # business logic, one module per domain
+│   │   │   ├── auth_service.py  shop_service.py  category_service.py
+│   │   │   ├── product_service.py  customer_service.py
+│   │   │   ├── transaction_service.py   # stock, prices, credit-limit lock
+│   │   │   ├── dashboard_service.py
+│   │   │   ├── credit_risk_service.py   # DB features, limit suggestion
+│   │   │   ├── demand_forecast_service.py
+│   │   │   ├── daily_brief_service.py
+│   │   │   ├── llm_service.py           # Gemini → Groq → OpenRouter
+│   │   │   └── voice_service.py         # audio cleanup, STT, matching, TTS chain
+│   │   ├── schemas/              # Pydantic request/response models
+│   │   ├── models/               # SQLAlchemy models + enums
+│   │   ├── core/                 # config, security (JWT/bcrypt), dependencies, ml_manager, clock (Nepal time)
+│   │   ├── db/database.py        # engine, session, pool warm-up
+│   │   └── alembic/versions/     # migrations
+│   └── ml/
+│       ├── credit/               # credit-risk classifier
+│       │   ├── train.py
+│       │   ├── scripts/generate_credit_data.py   # synthetic data
+│       │   ├── src/              # config, preprocessing, trainer, evaluator, explainability, predictor
+│       │   ├── inference/        # CLI examples: predict, predict_probability, explain
+│       │   ├── data/raw/         # credit_risk_dataset.csv
+│       │   ├── artifacts/        # metrics, model comparison, SHAP, confusion matrix
+│       │   └── models/credit_risk_pipeline.joblib
+│       └── demand/               # demand forecaster
+│           ├── train.py
+│           ├── scripts/generate_demand.py        # synthetic data
+│           ├── src/              # preprocessing, feature_engineering, trainer, forecasting_engine, explainability
+│           ├── inference/        # CLI examples: next day / next 7 days, explain
+│           ├── notebooks/eda.ipynb
+│           ├── data/raw/         # vyaparai_daily_demand.csv
+│           ├── artifacts/        # metrics, model comparison, SHAP
+│           └── models/forecasting_pipeline.joblib
+│
+├── web/                          # React 19 + Vite dashboard
+│   ├── Dockerfile  nginx.conf    # node build → nginx SPA
+│   ├── package.json  vite.config.ts
+│   └── src/
+│       ├── main.tsx  App.tsx  index.css   # brand tokens in index.css
+│       ├── pages/                # Dashboard, Inventory, Categories, Customers, Transactions,
+│       │                         # CreditRisk, DemandForecast, Reports, Notifications,
+│       │                         # Settings, ShopSetup, Login, Register
+│       ├── routes/               # router, lazy-loaded pages
+│       ├── layouts/              # MainLayout, AuthLayout, AuthShell
+│       ├── components/
+│       │   ├── ui/               # shadcn primitives + PageHeader, StatCard, StatusBadge, ...
+│       │   ├── charts/           # CreditRiskBreakdown, DriverBars, InfluenceDonut
+│       │   ├── dashboard/        # DailyBriefCard
+│       │   └── inventory/        # ProductDialog
+│       ├── services/             # axios client per backend domain
+│       ├── hooks/                # TanStack Query queries + mutations
+│       ├── lib/                  # api.ts, queryClient.ts, queryKeys.ts, shapGroups.ts
+│       ├── providers/            # AuthProvider
+│       ├── types/                # mirrors backend schemas
+│       ├── utils/                # format.ts (NPR), storage.ts (localStorage)
+│       └── constants/            # routes, storage keys
+│
+└── mobile/                       # Expo (React Native) app
+    ├── app.json  package.json  .env.example
+    └── src/
+        ├── app/                  # Expo Router screens: index, login, register, shops,
+        │                         # create-shop, voice, brief, offline
+        ├── api/                  # client.ts (fetch + auth + timeouts), endpoints.ts
+        ├── features/
+        │   ├── voice/            # use-voice-recorder, draft, offline-store,
+        │   │   └── components/   # record-panel, transcript-editor, transaction-card,
+        │   │                     # customer-picker, confirmation-player
+        │   └── shops/            # use-enter-shop
+        ├── components/           # ui/, auth/, dashboard/
+        ├── providers/            # session-provider (SecureStore)
+        ├── theme/tokens.ts
+        ├── lib/                  # format, validation
+        ├── config/env.ts         # EXPO_PUBLIC_API_URL
+        └── types/api.ts          # mirrors backend schemas
 ```
 
 Only `ml/*/models/*.joblib` are needed at runtime; data, notebooks, and artifacts are excluded from the Docker image.
@@ -169,14 +256,30 @@ pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
 
-# Web (needs frontend/.env: VITE_API_BASE_URL=http://localhost:8000/api/v1)
-cd frontend && npm install && npm run dev
+# Web (needs web/.env: VITE_API_BASE_URL=http://localhost:8000/api/v1)
+cd web && npm install && npm run dev
 
-# Mobile
+# Mobile (needs mobile/.env.local: EXPO_PUBLIC_API_URL=http://<LAN-IP>:8000)
 cd mobile && npm install && npx expo start
 ```
 
-Pretrained `.joblib` pipelines are included. To retrain, run `train.py` in `backend/ml/<model>/` with your data in `data/raw/`.
+Pretrained `.joblib` pipelines are included. To retrain, run `train.py` in `backend/ml/credit/` or `backend/ml/demand/` with your data in `data/raw/`.
+
+## Testing
+
+```bash
+# Backend: 5 DB-backed tests on in-memory SQLite (auth, stock updates,
+# insufficient stock, credit limit + repayment, shop ownership)
+cd backend && python -m unittest discover -s tests
+
+# Web: typecheck + build, lint
+cd web && npm run build && npm run lint
+
+# Mobile: typecheck, lint
+cd mobile && npx tsc --noEmit && npx expo lint
+```
+
+ML test-set metrics live in `backend/ml/*/artifacts/metrics.json`.
 
 ## Third-Party Components
 
@@ -184,7 +287,7 @@ Pretrained `.joblib` pipelines are included. To retrain, run `train.py` in `back
 | --- | --- |
 | Gemini API (Groq / OpenRouter fallback) | Function-calling assistant: intent parsing, daily summary |
 | ElevenLabs STT | Nepali speech-to-text |
-| Sarvam AI / Edge-TTS | Spoken confirmations and daily brief (Edge-TTS uses an unofficial endpoint) |
+| Edge-TTS → Sarvam AI → ElevenLabs → gTTS | Spoken confirmations and daily brief, tried in that order (Edge-TTS uses an unofficial endpoint) |
 | CatBoost / XGBoost / LightGBM, SHAP | Credit-risk and demand models, explainability |
 | FastAPI, PostgreSQL, React, Tailwind, Docker, nginx | App infrastructure (open source) |
 
