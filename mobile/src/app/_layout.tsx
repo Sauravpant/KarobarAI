@@ -3,12 +3,17 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { LogBox } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { SessionProvider, useSession } from '@/providers/session-provider';
 import { colors } from '@/theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
+
+// ponytail: expo-router 57.0.24 bug. Its linking code sets state before its own NavigationContainer mounts.
+// Dev-only and harmless. Remove once an expo-router update stops the warning.
+LogBox.ignoreLogs(["Can't perform a React state update on a component that hasn't mounted yet"]);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,8 +31,6 @@ function RootNavigator() {
   useEffect(() => {
     if (!isLoading) SplashScreen.hideAsync();
   }, [isLoading]);
-
-  if (isLoading) return null;
 
   return (
     <Stack
