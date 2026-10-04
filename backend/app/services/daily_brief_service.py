@@ -126,21 +126,30 @@ def _get(db: Session, shop_id: uuid.UUID, brief_date: date) -> DailyBrief | None
 async def get_or_create_brief(
     db: Session, user: User, shop_id: uuid.UUID, brief_date: date, audio_url: str
 ) -> DailyBriefResponse:
-    """LLM transcript is generated once per shop+date and saved. Audio is synthesized on each play."""
+    """LLM transcript is saved per shop+date and reused until the day's data changes
+    (new sale, stock or credit change). Audio is synthesized on each play."""
     get_shop_by_id(db, user, shop_id)
+    ctx = await asyncio.to_thread(build_context, db, user, shop_id, brief_date)
+    context = ctx.model_dump(mode="json")
     existing = _get(db, shop_id, brief_date)
-    if existing:
+    if existing and existing.context == context:
         return _to_response(existing, audio_url)
 
-    ctx = await asyncio.to_thread(build_context, db, user, shop_id, brief_date)
     db.commit()  # release connection; idle pooled connections get dropped during the slow LLM call
     transcript = await llm_service.generate(_prompt(ctx), temperature=0.6)
+
+    existing = _get(db, shop_id, brief_date)
+    if existing:
+        existing.transcript = transcript
+        existing.context = context
+        db.commit()
+        return _to_response(existing, audio_url)
 
     brief = DailyBrief(
         shop_id=shop_id,
         brief_date=brief_date,
         transcript=transcript,
-        context=ctx.model_dump(mode="json"),
+        context=context,
     )
     response = _to_response(brief, audio_url)
     db.add(brief)
